@@ -20,10 +20,12 @@
 use std::{collections::{HashMap, HashSet}, path::PathBuf, fs::{self, File}, io::{self, Write}, sync::Arc};
 use sp_core::{
 	crypto::{IsWrappedBy, CryptoTypePublicPair, KeyTypeId, Pair as PairT, Protected, Public},
-	traits::{BareCryptoStore, BareCryptoStoreError as TraitError},
+	traits::{BareCryptoStore, Error as TraitError},
+	sr25519::{Public as Sr25519Public, Pair as Sr25519Pair},
+	vrf::{VRFTranscriptData, VRFSignature, make_transcript},
 	Encode,
 };
-use sp_application_crypto::{AppKey, AppPublic, AppPair, ed25519, sr25519};
+use sp_application_crypto::{AppKey, AppPublic, AppPair, ed25519, sr25519, ecdsa};
 use parking_lot::RwLock;
 
 /// Keystore pointer
@@ -270,7 +272,7 @@ impl Store {
 	fn raw_public_keys(&self, id: KeyTypeId) -> Result<Vec<Vec<u8>>> {
 		let mut public_keys: Vec<Vec<u8>> = self.additional.keys()
 			.into_iter()
-    		.filter_map(|k| if k.0 == id { Some(k.1.clone()) } else { None })
+			.filter_map(|k| if k.0 == id { Some(k.1.clone()) } else { None })
 			.collect();
 
 		if let Some(path) = &self.path {
@@ -308,6 +310,7 @@ impl BareCryptoStore for Store {
 			.fold(Vec::new(), |mut v, k| {
 				v.push(CryptoTypePublicPair(sr25519::CRYPTO_ID, k.clone()));
 				v.push(CryptoTypePublicPair(ed25519::CRYPTO_ID, k.clone()));
+				v.push(CryptoTypePublicPair(ecdsa::CRYPTO_ID, k.clone()));
 				v
 			}))
 	}
@@ -343,6 +346,13 @@ impl BareCryptoStore for Store {
 					.key_pair_by_type::<sr25519::Pair>(&pub_key, id)
 					.map_err(|e| TraitError::from(e))?;
 				Ok(key_pair.sign(msg).encode())
+			},
+			ecdsa::CRYPTO_ID => {
+				let pub_key = ecdsa::Public::from_slice(key.1.as_slice());
+				let key_pair: ecdsa::Pair = self
+					.key_pair_by_type::<ecdsa::Pair>(&pub_key, id)
+					.map_err(|e| TraitError::from(e))?;
+				Ok(key_pair.sign(msg).encode())
 			}
 			_ => Err(TraitError::KeyNotSupported(id))
 		}
@@ -355,7 +365,7 @@ impl BareCryptoStore for Store {
 				 .map(|k| sr25519::Public::from_slice(k.as_slice()))
 				 .collect()
 			})
-    		.unwrap_or_default()
+			.unwrap_or_default()
 	}
 
 	fn sr25519_generate_new(
@@ -394,6 +404,29 @@ impl BareCryptoStore for Store {
 		Ok(pair.public())
 	}
 
+	fn ecdsa_public_keys(&self, key_type: KeyTypeId) -> Vec<ecdsa::Public> {
+		self.raw_public_keys(key_type)
+			.map(|v| {
+				v.into_iter()
+					.map(|k| ecdsa::Public::from_slice(k.as_slice()))
+					.collect()
+			})
+			.unwrap_or_default()
+	}
+
+	fn ecdsa_generate_new(
+		&mut self,
+		id: KeyTypeId,
+		seed: Option<&str>,
+	) -> std::result::Result<ecdsa::Public, TraitError> {
+		let pair = match seed {
+			Some(seed) => self.insert_ephemeral_from_seed_by_type::<ecdsa::Pair>(seed, id),
+			None => self.generate_by_type::<ecdsa::Pair>(id),
+		}.map_err(|e| -> TraitError { e.into() })?;
+
+		Ok(pair.public())
+	}
+
 	fn insert_unknown(&mut self, key_type: KeyTypeId, suri: &str, public: &[u8])
 		-> std::result::Result<(), ()>
 	{
@@ -406,6 +439,23 @@ impl BareCryptoStore for Store {
 
 	fn has_keys(&self, public_keys: &[(Vec<u8>, KeyTypeId)]) -> bool {
 		public_keys.iter().all(|(p, t)| self.key_phrase_by_type(&p, *t).is_ok())
+	}
+
+	fn sr25519_vrf_sign(
+		&self,
+		key_type: KeyTypeId,
+		public: &Sr25519Public,
+		transcript_data: VRFTranscriptData,
+	) -> std::result::Result<VRFSignature, TraitError> {
+		let transcript = make_transcript(transcript_data);
+		let pair = self.key_pair_by_type::<Sr25519Pair>(public, key_type)
+			.map_err(|e| TraitError::PairNotFound(e.to_string()))?;
+
+		let (inout, proof, _) = pair.as_ref().vrf_sign(transcript);
+		Ok(VRFSignature {
+			output: inout.to_output(),
+			proof,
+		})
 	}
 }
 

@@ -1,18 +1,20 @@
-// Copyright 2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
-// Substrate is free software: you can redistribute it and/or modify
+// Copyright (C) 2020 Parity Technologies (UK) Ltd.
+// SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+
+// This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-// Substrate is distributed in the hope that it will be useful,
+// This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU General Public License for more details.
 
 // You should have received a copy of the GNU General Public License
-// along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 //! Trie benchmark (integrated).
 
@@ -30,7 +32,7 @@ use crate::{
 	core::{self, Mode, Path},
 	generator::generate_trie,
 	simple_trie::SimpleTrie,
-	tempdb::TempDatabase,
+	tempdb::{TempDatabase, DatabaseType},
 };
 
 pub const SAMPLE_SIZE: usize = 100;
@@ -91,6 +93,7 @@ fn pretty_print(v: usize) -> String {
 
 pub struct TrieReadBenchmarkDescription {
 	pub database_size: DatabaseSize,
+	pub database_type: DatabaseType,
 }
 
 pub struct TrieReadBenchmark {
@@ -98,6 +101,7 @@ pub struct TrieReadBenchmark {
 	root: Hash,
 	warmup_keys: KeyValues,
 	query_keys: KeyValues,
+	database_type: DatabaseType,
 }
 
 impl core::BenchmarkDescription for TrieReadBenchmarkDescription {
@@ -139,7 +143,7 @@ impl core::BenchmarkDescription for TrieReadBenchmarkDescription {
 		assert_eq!(query_keys.len(), SAMPLE_SIZE);
 
 		let root = generate_trie(
-			database.open(),
+			database.open(self.database_type),
 			key_values,
 		);
 
@@ -148,14 +152,16 @@ impl core::BenchmarkDescription for TrieReadBenchmarkDescription {
 			root,
 			warmup_keys,
 			query_keys,
+			database_type: self.database_type,
 		})
 	}
 
 	fn name(&self) -> Cow<'static, str> {
 		format!(
-			"Trie read benchmark({} database ({} keys))",
+			"Trie read benchmark({} database ({} keys), db_type: {})",
 			self.database_size,
 			pretty_print(self.database_size.keys()),
+			self.database_type,
 		).into()
 	}
 }
@@ -173,7 +179,7 @@ impl core::Benchmark for TrieReadBenchmark {
 	fn run(&mut self, mode: Mode) -> std::time::Duration {
 		let mut db = self.database.clone();
 		let storage: Arc<dyn sp_state_machine::Storage<sp_core::Blake2Hasher>> =
-			Arc::new(Storage(db.open()));
+			Arc::new(Storage(db.open(self.database_type)));
 
 		let trie_backend = sp_state_machine::TrieBackend::new(
 			storage,
@@ -208,7 +214,9 @@ impl core::Benchmark for TrieReadBenchmark {
 
 pub struct TrieWriteBenchmarkDescription {
 	pub database_size: DatabaseSize,
+	pub database_type: DatabaseType,
 }
+
 
 impl core::BenchmarkDescription for TrieWriteBenchmarkDescription {
 	fn path(&self) -> Path {
@@ -245,7 +253,7 @@ impl core::BenchmarkDescription for TrieWriteBenchmarkDescription {
 		assert_eq!(warmup_keys.len(), SAMPLE_SIZE);
 
 		let root = generate_trie(
-			database.open(),
+			database.open(self.database_type),
 			key_values,
 		);
 
@@ -253,14 +261,16 @@ impl core::BenchmarkDescription for TrieWriteBenchmarkDescription {
 			database,
 			root,
 			warmup_keys,
+			database_type: self.database_type,
 		})
 	}
 
 	fn name(&self) -> Cow<'static, str> {
 		format!(
-			"Trie write benchmark({} database ({} keys))",
+			"Trie write benchmark({} database ({} keys), db_type = {})",
 			self.database_size,
 			pretty_print(self.database_size.keys()),
+			self.database_type,
 		).into()
 	}
 }
@@ -269,13 +279,14 @@ struct TrieWriteBenchmark {
 	database: TempDatabase,
 	root: Hash,
 	warmup_keys: KeyValues,
+	database_type: DatabaseType,
 }
 
 impl core::Benchmark for TrieWriteBenchmark {
 	fn run(&mut self, mode: Mode) -> std::time::Duration {
 		let mut rng = rand::thread_rng();
 		let mut db = self.database.clone();
-		let kvdb = db.open();
+		let kvdb = db.open(self.database_type);
 
 		let mut new_root = self.root.clone();
 

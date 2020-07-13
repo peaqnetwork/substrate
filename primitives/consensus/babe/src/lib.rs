@@ -1,18 +1,19 @@
-// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
-// Substrate is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// Copyright (C) 2019-2020 Parity Technologies (UK) Ltd.
+// SPDX-License-Identifier: Apache-2.0
 
-// Substrate is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-
-// You should have received a copy of the GNU General Public License
-// along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// 	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Primitives for BABE.
 #![deny(warnings)]
@@ -25,10 +26,13 @@ pub mod inherents;
 pub use sp_consensus_vrf::schnorrkel::{
 	Randomness, VRF_PROOF_LENGTH, VRF_OUTPUT_LENGTH, RANDOMNESS_LENGTH
 };
+pub use merlin::Transcript;
 
 use codec::{Encode, Decode};
 use sp_std::vec::Vec;
 use sp_runtime::{ConsensusEngineId, RuntimeDebug};
+#[cfg(feature = "std")]
+use sp_core::vrf::{VRFTranscriptData, VRFTranscriptValue};
 use crate::digests::{NextEpochDescriptor, NextConfigDescriptor};
 
 mod app {
@@ -38,6 +42,9 @@ mod app {
 
 /// The prefix used by BABE for its VRF keys.
 pub const BABE_VRF_PREFIX: &[u8] = b"substrate-babe-vrf";
+
+/// BABE VRFInOut context.
+pub static BABE_VRF_INOUT_CONTEXT: &[u8] = b"BabeVRFInOutContext";
 
 /// A Babe authority keypair. Necessarily equivalent to the schnorrkel public key used in
 /// the main Babe module. If that ever changes, then this must, too.
@@ -75,6 +82,36 @@ pub type BabeAuthorityWeight = u64;
 
 /// The weight of a BABE block.
 pub type BabeBlockWeight = u32;
+
+/// Make a VRF transcript from given randomness, slot number and epoch.
+pub fn make_transcript(
+	randomness: &Randomness,
+	slot_number: u64,
+	epoch: u64,
+) -> Transcript {
+	let mut transcript = Transcript::new(&BABE_ENGINE_ID);
+	transcript.append_u64(b"slot number", slot_number);
+	transcript.append_u64(b"current epoch", epoch);
+	transcript.append_message(b"chain randomness", &randomness[..]);
+	transcript
+}
+
+/// Make a VRF transcript data container
+#[cfg(feature = "std")]
+pub fn make_transcript_data(
+	randomness: &Randomness,
+	slot_number: u64,
+	epoch: u64,
+) -> VRFTranscriptData {
+	VRFTranscriptData {
+		label: &BABE_ENGINE_ID,
+		items: vec![
+			("slot number", VRFTranscriptValue::U64(slot_number)),
+			("current epoch", VRFTranscriptValue::U64(epoch)),
+			("chain randomness", VRFTranscriptValue::Bytes(&randomness[..])),
+		]
+	}
+}
 
 /// An consensus log item for BABE.
 #[derive(Decode, Encode, Clone, PartialEq, Eq)]

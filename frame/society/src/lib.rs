@@ -1,18 +1,19 @@
-// Copyright 2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
-// Substrate is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// Copyright (C) 2020 Parity Technologies (UK) Ltd.
+// SPDX-License-Identifier: Apache-2.0
 
-// Substrate is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-
-// You should have received a copy of the GNU General Public License
-// along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// 	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! # Society Module
 //!
@@ -531,7 +532,7 @@ decl_module! {
 		///
 		/// Total Complexity: O(M + B + C + logM + logB + X)
 		/// # </weight>
-		#[weight = 50_000_000]
+		#[weight = T::MaximumBlockWeight::get() / 10]
 		pub fn bid(origin, value: BalanceOf<T, I>) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			ensure!(!<SuspendedCandidates<T, I>>::contains_key(&who), Error::<T, I>::Suspended);
@@ -570,7 +571,7 @@ decl_module! {
 		///
 		/// Total Complexity: O(B + X)
 		/// # </weight>
-		#[weight = 20_000_000]
+		#[weight = T::MaximumBlockWeight::get() / 10]
 		pub fn unbid(origin, pos: u32) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 
@@ -640,7 +641,7 @@ decl_module! {
 		///
 		/// Total Complexity: O(M + B + C + logM + logB + X)
 		/// # </weight>
-		#[weight = 50_000_000]
+		#[weight = T::MaximumBlockWeight::get() / 10]
 		pub fn vouch(origin, who: T::AccountId, value: BalanceOf<T, I>, tip: BalanceOf<T, I>) -> DispatchResult {
 			let voucher = ensure_signed(origin)?;
 			// Check user is not suspended.
@@ -681,7 +682,7 @@ decl_module! {
 		///
 		/// Total Complexity: O(B)
 		/// # </weight>
-		#[weight = 20_000_000]
+		#[weight = T::MaximumBlockWeight::get() / 10]
 		pub fn unvouch(origin, pos: u32) -> DispatchResult {
 			let voucher = ensure_signed(origin)?;
 			ensure!(Self::vouching(&voucher) == Some(VouchingStatus::Vouching), Error::<T, I>::NotVouching);
@@ -719,7 +720,7 @@ decl_module! {
 		///
 		/// Total Complexity: O(M + logM + C)
 		/// # </weight>
-		#[weight = 30_000_000]
+		#[weight = T::MaximumBlockWeight::get() / 10]
 		pub fn vote(origin, candidate: <T::Lookup as StaticLookup>::Source, approve: bool) {
 			let voter = ensure_signed(origin)?;
 			let candidate = T::Lookup::lookup(candidate)?;
@@ -750,7 +751,7 @@ decl_module! {
 		///
 		/// Total Complexity: O(M + logM)
 		/// # </weight>
-		#[weight = 20_000_000]
+		#[weight = T::MaximumBlockWeight::get() / 10]
 		pub fn defender_vote(origin, approve: bool) {
 			let voter = ensure_signed(origin)?;
 			let members = <Members<T, I>>::get();
@@ -782,7 +783,7 @@ decl_module! {
 		///
 		/// Total Complexity: O(M + logM + P + X)
 		/// # </weight>
-		#[weight = 30_000_000]
+		#[weight = T::MaximumBlockWeight::get() / 10]
 		pub fn payout(origin) {
 			let who = ensure_signed(origin)?;
 
@@ -824,7 +825,7 @@ decl_module! {
 		///
 		/// Total Complexity: O(1)
 		/// # </weight>
-		#[weight = 0]
+		#[weight = T::MaximumBlockWeight::get() / 10]
 		fn found(origin, founder: T::AccountId, max_members: u32, rules: Vec<u8>) {
 			T::FounderSetOrigin::ensure_origin(origin)?;
 			ensure!(!<Head<T, I>>::exists(), Error::<T, I>::AlreadyFounded);
@@ -851,7 +852,7 @@ decl_module! {
 		///
 		/// Total Complexity: O(1)
 		/// # </weight>
-		#[weight = 20_000_000]
+		#[weight = T::MaximumBlockWeight::get() / 10]
 		fn unfound(origin) {
 			let founder = ensure_signed(origin)?;
 			ensure!(Founder::<T, I>::get() == Some(founder.clone()), Error::<T, I>::NotFounder);
@@ -893,7 +894,7 @@ decl_module! {
 		///
 		/// Total Complexity: O(M + logM + B)
 		/// # </weight>
-		#[weight = 30_000_000]
+		#[weight = T::MaximumBlockWeight::get() / 10]
 		fn judge_suspended_member(origin, who: T::AccountId, forgive: bool) {
 			T::SuspensionJudgementOrigin::ensure_origin(origin)?;
 			ensure!(<SuspendedMembers<T, I>>::contains_key(&who), Error::<T, I>::NotSuspended);
@@ -964,7 +965,7 @@ decl_module! {
 		///
 		/// Total Complexity: O(M + logM + B + X)
 		/// # </weight>
-		#[weight = 50_000_000]
+		#[weight = T::MaximumBlockWeight::get() / 10]
 		fn judge_suspended_candidate(origin, who: T::AccountId, judgement: Judgement) {
 			T::SuspensionJudgementOrigin::ensure_origin(origin)?;
 			if let Some((value, kind)) = <SuspendedCandidates<T, I>>::get(&who) {
@@ -1024,7 +1025,7 @@ decl_module! {
 		///
 		/// Total Complexity: O(1)
 		/// # </weight>
-		#[weight = 0]
+		#[weight = T::MaximumBlockWeight::get() / 10]
 		fn set_max_members(origin, max: u32) {
 			ensure_root(origin)?;
 			ensure!(max > 1, Error::<T, I>::MaxMembers);
@@ -1035,10 +1036,14 @@ decl_module! {
 		fn on_initialize(n: T::BlockNumber) -> Weight {
 			let mut members = vec![];
 
+			let mut weight = 0;
+
 			// Run a candidate/membership rotation
 			if (n % T::RotationPeriod::get()).is_zero() {
 				members = <Members<T, I>>::get();
 				Self::rotate_period(&mut members);
+
+				weight += T::MaximumBlockWeight::get() / 20;
 			}
 
 			// Run a challenge rotation
@@ -1048,9 +1053,11 @@ decl_module! {
 					members = <Members<T, I>>::get();
 				}
 				Self::rotate_challenge(&mut members);
+
+				weight += T::MaximumBlockWeight::get() / 20;
 			}
 
-			0
+			weight
 		}
 	}
 }

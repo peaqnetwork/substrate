@@ -1,18 +1,20 @@
-// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
-// Substrate is free software: you can redistribute it and/or modify
+// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+
+// This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-// Substrate is distributed in the hope that it will be useful,
+// This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU General Public License for more details.
 
 // You should have received a copy of the GNU General Public License
-// along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 use sp_consensus::BlockOrigin;
 use std::time::Duration;
@@ -671,12 +673,12 @@ fn imports_stale_once() {
 	// check that NEW block is imported from announce message
 	let new_hash = net.peer(0).push_blocks(1, false);
 	import_with_announce(&mut net, new_hash);
-	assert_eq!(net.peer(1).num_processed_blocks(), 1);
+	assert_eq!(net.peer(1).num_downloaded_blocks(), 1);
 
 	// check that KNOWN STALE block is imported from announce message
 	let known_stale_hash = net.peer(0).push_blocks_at(BlockId::Number(0), 1, true);
 	import_with_announce(&mut net, known_stale_hash);
-	assert_eq!(net.peer(1).num_processed_blocks(), 2);
+	assert_eq!(net.peer(1).num_downloaded_blocks(), 2);
 }
 
 #[test]

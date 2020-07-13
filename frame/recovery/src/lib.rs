@@ -1,18 +1,19 @@
-// Copyright 2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
-// Substrate is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// Copyright (C) 2020 Parity Technologies (UK) Ltd.
+// SPDX-License-Identifier: Apache-2.0
 
-// Substrate is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-
-// You should have received a copy of the GNU General Public License
-// along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// 	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! # Recovery Pallet
 //!
@@ -159,7 +160,7 @@ use codec::{Encode, Decode};
 
 use frame_support::{
 	decl_module, decl_event, decl_storage, decl_error, ensure,
-	Parameter, RuntimeDebug, weights::{GetDispatchInfo, FunctionOf, Pays},
+	Parameter, RuntimeDebug, weights::GetDispatchInfo,
 	traits::{Currency, ReservableCurrency, Get, BalanceStatus},
 	dispatch::PostDispatchInfo,
 };
@@ -319,6 +320,18 @@ decl_module! {
 	pub struct Module<T: Trait> for enum Call where origin: T::Origin {
 		type Error = Error<T>;
 
+		/// The base amount of currency needed to reserve for creating a recovery configuration.
+		const ConfigDepositBase: BalanceOf<T> = T::ConfigDepositBase::get();
+
+		/// The amount of currency needed per additional user when creating a recovery configuration.
+		const FriendDepositFactor: BalanceOf<T> = T::FriendDepositFactor::get();
+
+		/// The maximum amount of friends allowed in a recovery configuration.
+		const MaxFriends: u16 = T::MaxFriends::get();
+
+		/// The base amount of currency needed to reserve for starting a recovery.
+		const RecoveryDeposit: BalanceOf<T> = T::RecoveryDeposit::get();
+
 		/// Deposit one of this module's events by using the default implementation.
 		fn deposit_event() = default;
 
@@ -335,11 +348,7 @@ decl_module! {
 		/// - The weight of the `call` + 10,000.
 		/// - One storage lookup to check account is recovered by `who`. O(1)
 		/// # </weight>
-		#[weight = FunctionOf(
-			|args: (&T::AccountId, &Box<<T as Trait>::Call>)| args.1.get_dispatch_info().weight + 10_000,
-			|args: (&T::AccountId, &Box<<T as Trait>::Call>)| args.1.get_dispatch_info().class,
-			Pays::Yes,
-		)]
+		#[weight = (call.get_dispatch_info().weight + 10_000, call.get_dispatch_info().class)]
 		fn as_recovered(origin,
 			account: T::AccountId,
 			call: Box<<T as Trait>::Call>

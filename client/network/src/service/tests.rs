@@ -1,21 +1,24 @@
-// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
-// Substrate is free software: you can redistribute it and/or modify
+// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+
+// This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-// Substrate is distributed in the hope that it will be useful,
+// This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU General Public License for more details.
 
 // You should have received a copy of the GNU General Public License
-// along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::{config, Event, NetworkService, NetworkWorker};
 
+use libp2p::PeerId;
 use futures::prelude::*;
 use sp_runtime::traits::{Block as BlockT, Header as _};
 use std::{sync::Arc, time::Duration};
@@ -85,6 +88,8 @@ fn build_test_full_node(config: config::NetworkConfiguration)
 		Box::new(client.clone()),
 		None,
 		None,
+		&sp_core::testing::SpawnBlockingExecutor::new(),
+		None,
 	));
 
 	let worker = NetworkWorker::new(config::Params {
@@ -134,6 +139,7 @@ fn build_nodes_one_proto()
 
 	let (node2, events_stream2) = build_test_full_node(config::NetworkConfiguration {
 		notifications_protocols: vec![(ENGINE_ID, From::from(&b"/foo"[..]))],
+		listen_addresses: vec![],
 		reserved_nodes: vec![config::MultiaddrWithPeerId {
 			multiaddr: listen_addr,
 			peer_id: node1.local_peer_id().clone(),
@@ -266,5 +272,191 @@ fn notifications_state_consistent() {
 				future::Either::Right(Event::Dht(_)) => {}
 			};
 		}
+	});
+}
+
+#[test]
+fn lots_of_incoming_peers_works() {
+	let listen_addr = config::build_multiaddr![Memory(rand::random::<u64>())];
+
+	let (main_node, _) = build_test_full_node(config::NetworkConfiguration {
+		notifications_protocols: vec![(ENGINE_ID, From::from(&b"/foo"[..]))],
+		listen_addresses: vec![listen_addr.clone()],
+		in_peers: u32::max_value(),
+		transport: config::TransportConfig::MemoryOnly,
+		.. config::NetworkConfiguration::new_local()
+	});
+
+	let main_node_peer_id = main_node.local_peer_id().clone();
+
+	// We spawn background tasks and push them in this `Vec`. They will all be waited upon before
+	// this test ends.
+	let mut background_tasks_to_wait = Vec::new();
+
+	for _ in 0..32 {
+		let main_node_peer_id = main_node_peer_id.clone();
+
+		let (_dialing_node, event_stream) = build_test_full_node(config::NetworkConfiguration {
+			notifications_protocols: vec![(ENGINE_ID, From::from(&b"/foo"[..]))],
+			listen_addresses: vec![],
+			reserved_nodes: vec![config::MultiaddrWithPeerId {
+				multiaddr: listen_addr.clone(),
+				peer_id: main_node_peer_id.clone(),
+			}],
+			transport: config::TransportConfig::MemoryOnly,
+			.. config::NetworkConfiguration::new_local()
+		});
+
+		background_tasks_to_wait.push(async_std::task::spawn(async move {
+			// Create a dummy timer that will "never" fire, and that will be overwritten when we
+			// actually need the timer. Using an Option would be technically cleaner, but it would
+			// make the code below way more complicated.
+			let mut timer = futures_timer::Delay::new(Duration::from_secs(3600 * 24 * 7)).fuse();
+
+			let mut event_stream = event_stream.fuse();
+			loop {
+				futures::select! {
+					_ = timer => {
+						// Test succeeds when timer fires.
+						return;
+					}
+					ev = event_stream.next() => {
+						match ev.unwrap() {
+							Event::NotificationStreamOpened { remote, .. } => {
+								assert_eq!(remote, main_node_peer_id);
+								// Test succeeds after 5 seconds. This timer is here in order to
+								// detect a potential problem after opening.
+								timer = futures_timer::Delay::new(Duration::from_secs(5)).fuse();
+							}
+							Event::NotificationStreamClosed { .. } => {
+								// Test failed.
+								panic!();
+							}
+							_ => {}
+						}
+					}
+				}
+			}
+		}));
+	}
+
+	futures::executor::block_on(async move {
+		future::join_all(background_tasks_to_wait).await
+	});
+}
+
+#[test]
+#[should_panic(expected = "don't match the transport")]
+fn ensure_listen_addresses_consistent_with_transport_memory() {
+	let listen_addr = config::build_multiaddr![Ip4([127, 0, 0, 1]), Tcp(0_u16)];
+
+	let _ = build_test_full_node(config::NetworkConfiguration {
+		listen_addresses: vec![listen_addr.clone()],
+		transport: config::TransportConfig::MemoryOnly,
+		.. config::NetworkConfiguration::new("test-node", "test-client", Default::default(), None)
+	});
+}
+
+#[test]
+#[should_panic(expected = "don't match the transport")]
+fn ensure_listen_addresses_consistent_with_transport_not_memory() {
+	let listen_addr = config::build_multiaddr![Memory(rand::random::<u64>())];
+
+	let _ = build_test_full_node(config::NetworkConfiguration {
+		listen_addresses: vec![listen_addr.clone()],
+		.. config::NetworkConfiguration::new("test-node", "test-client", Default::default(), None)
+	});
+}
+
+#[test]
+#[should_panic(expected = "don't match the transport")]
+fn ensure_boot_node_addresses_consistent_with_transport_memory() {
+	let listen_addr = config::build_multiaddr![Memory(rand::random::<u64>())];
+	let boot_node = config::MultiaddrWithPeerId {
+		multiaddr: config::build_multiaddr![Ip4([127, 0, 0, 1]), Tcp(0_u16)],
+		peer_id: PeerId::random(),
+	};
+
+	let _ = build_test_full_node(config::NetworkConfiguration {
+		listen_addresses: vec![listen_addr.clone()],
+		transport: config::TransportConfig::MemoryOnly,
+		boot_nodes: vec![boot_node],
+		.. config::NetworkConfiguration::new("test-node", "test-client", Default::default(), None)
+	});
+}
+
+#[test]
+#[should_panic(expected = "don't match the transport")]
+fn ensure_boot_node_addresses_consistent_with_transport_not_memory() {
+	let listen_addr = config::build_multiaddr![Ip4([127, 0, 0, 1]), Tcp(0_u16)];
+	let boot_node = config::MultiaddrWithPeerId {
+		multiaddr: config::build_multiaddr![Memory(rand::random::<u64>())],
+		peer_id: PeerId::random(),
+	};
+
+	let _ = build_test_full_node(config::NetworkConfiguration {
+		listen_addresses: vec![listen_addr.clone()],
+		boot_nodes: vec![boot_node],
+		.. config::NetworkConfiguration::new("test-node", "test-client", Default::default(), None)
+	});
+}
+
+#[test]
+#[should_panic(expected = "don't match the transport")]
+fn ensure_reserved_node_addresses_consistent_with_transport_memory() {
+	let listen_addr = config::build_multiaddr![Memory(rand::random::<u64>())];
+	let reserved_node = config::MultiaddrWithPeerId {
+		multiaddr: config::build_multiaddr![Ip4([127, 0, 0, 1]), Tcp(0_u16)],
+		peer_id: PeerId::random(),
+	};
+
+	let _ = build_test_full_node(config::NetworkConfiguration {
+		listen_addresses: vec![listen_addr.clone()],
+		transport: config::TransportConfig::MemoryOnly,
+		reserved_nodes: vec![reserved_node],
+		.. config::NetworkConfiguration::new("test-node", "test-client", Default::default(), None)
+	});
+}
+
+#[test]
+#[should_panic(expected = "don't match the transport")]
+fn ensure_reserved_node_addresses_consistent_with_transport_not_memory() {
+	let listen_addr = config::build_multiaddr![Ip4([127, 0, 0, 1]), Tcp(0_u16)];
+	let reserved_node = config::MultiaddrWithPeerId {
+		multiaddr: config::build_multiaddr![Memory(rand::random::<u64>())],
+		peer_id: PeerId::random(),
+	};
+
+	let _ = build_test_full_node(config::NetworkConfiguration {
+		listen_addresses: vec![listen_addr.clone()],
+		reserved_nodes: vec![reserved_node],
+		.. config::NetworkConfiguration::new("test-node", "test-client", Default::default(), None)
+	});
+}
+
+#[test]
+#[should_panic(expected = "don't match the transport")]
+fn ensure_public_addresses_consistent_with_transport_memory() {
+	let listen_addr = config::build_multiaddr![Memory(rand::random::<u64>())];
+	let public_address = config::build_multiaddr![Ip4([127, 0, 0, 1]), Tcp(0_u16)];
+
+	let _ = build_test_full_node(config::NetworkConfiguration {
+		listen_addresses: vec![listen_addr.clone()],
+		transport: config::TransportConfig::MemoryOnly,
+		public_addresses: vec![public_address],
+		.. config::NetworkConfiguration::new("test-node", "test-client", Default::default(), None)
+	});
+}
+
+#[test]
+#[should_panic(expected = "don't match the transport")]
+fn ensure_public_addresses_consistent_with_transport_not_memory() {
+	let listen_addr = config::build_multiaddr![Ip4([127, 0, 0, 1]), Tcp(0_u16)];
+	let public_address = config::build_multiaddr![Memory(rand::random::<u64>())];
+
+	let _ = build_test_full_node(config::NetworkConfiguration {
+		listen_addresses: vec![listen_addr.clone()],
+		public_addresses: vec![public_address],
+		.. config::NetworkConfiguration::new("test-node", "test-client", Default::default(), None)
 	});
 }

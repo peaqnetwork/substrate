@@ -1,18 +1,19 @@
-// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
-// Substrate is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// SPDX-License-Identifier: Apache-2.0
 
-// Substrate is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-
-// You should have received a copy of the GNU General Public License
-// along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// 	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 // tag::description[]
 //! Cryptographic utilities.
@@ -356,10 +357,18 @@ macro_rules! ss58_address_format {
 	( $( $identifier:tt => ($number:expr, $name:expr, $desc:tt) )* ) => (
 		/// A known address (sub)format/network ID for SS58.
 		#[derive(Copy, Clone, PartialEq, Eq)]
+		#[cfg_attr(feature = "std", derive(Debug))]
 		pub enum Ss58AddressFormat {
 			$(#[doc = $desc] $identifier),*,
 			/// Use a manually provided numeric value.
 			Custom(u8),
+		}
+
+		#[cfg(feature = "std")]
+		impl std::fmt::Display for Ss58AddressFormat {
+			fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+				write!(f, "{:?}", self)
+			}
 		}
 
 		static ALL_SS58_ADDRESS_FORMATS: [Ss58AddressFormat; 0 $(+ { let _ = $number; 1})*] = [
@@ -461,6 +470,8 @@ ss58_address_format!(
 		(16, "kulupu", "Kulupu mainnet, standard account (*25519).")
 	DarwiniaAccount =>
 		(18, "darwinia", "Darwinia Chain mainnet, standard account (*25519).")
+	StafiAccount =>
+		(20, "stafi", "Stafi mainnet, standard account (*25519).")
 	RobonomicsAccount =>
 		(32, "robonomics", "Any Robonomics network standard account (*25519).")
 	CentrifugeAccount =>
@@ -559,6 +570,8 @@ pub trait Public:
 
 	/// Return a slice filled with raw data.
 	fn as_slice(&self) -> &[u8] { self.as_ref() }
+	/// Return `CryptoTypePublicPair` from public key.
+	fn to_public_crypto_pair(&self) -> CryptoTypePublicPair;
 }
 
 /// An opaque 32-byte cryptographic identifier.
@@ -706,6 +719,11 @@ mod dummy {
 		#[cfg(feature = "std")]
 		fn to_raw_vec(&self) -> Vec<u8> { vec![] }
 		fn as_slice(&self) -> &[u8] { b"" }
+		fn to_public_crypto_pair(&self) -> CryptoTypePublicPair {
+			CryptoTypePublicPair(
+				CryptoTypeId(*b"dumm"), Public::to_raw_vec(self)
+			)
+		}
 	}
 
 	impl Pair for Dummy {
@@ -873,7 +891,7 @@ pub trait Pair: CryptoType + Sized + Clone + Send + Sync + 'static {
 
 	/// Interprets the string `s` in order to generate a key pair.
 	///
-	/// See [`from_string_with_seed`](Self::from_string_with_seed) for more extensive documentation.
+	/// See [`from_string_with_seed`](Pair::from_string_with_seed) for more extensive documentation.
 	#[cfg(feature = "std")]
 	fn from_string(s: &str, password_override: Option<&str>) -> Result<Self, SecretStringError> {
 		Self::from_string_with_seed(s, password_override).map(|x| x.0)
@@ -1006,6 +1024,8 @@ pub mod key_types {
 	pub const AUTHORITY_DISCOVERY: KeyTypeId = KeyTypeId(*b"audi");
 	/// Key type for staking, built-in. Identified as `stak`.
 	pub const STAKING: KeyTypeId = KeyTypeId(*b"stak");
+	/// Key type for equivocation reporting, built-in. Identified as `fish`.
+	pub const REPORTING: KeyTypeId = KeyTypeId(*b"fish");
 	/// A key type ID useful for tests.
 	pub const DUMMY: KeyTypeId = KeyTypeId(*b"dumy");
 }
@@ -1058,6 +1078,11 @@ mod tests {
 		}
 		fn to_raw_vec(&self) -> Vec<u8> {
 			vec![]
+		}
+		fn to_public_crypto_pair(&self) -> CryptoTypePublicPair {
+			CryptoTypePublicPair(
+				CryptoTypeId(*b"dumm"), self.to_raw_vec(),
+			)
 		}
 	}
 	impl Pair for TestPair {

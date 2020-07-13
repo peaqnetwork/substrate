@@ -1,34 +1,35 @@
-// Copyright 2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
-// Substrate is free software: you can redistribute it and/or modify
+// Copyright (C) 2020 Parity Technologies (UK) Ltd.
+// SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+
+// This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-// Substrate is distributed in the hope that it will be useful,
+// This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU General Public License for more details.
 
 // You should have received a copy of the GNU General Public License
-// along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::CliConfiguration;
 use crate::Result;
-use crate::SubstrateCli;
 use crate::Subcommand;
+use crate::SubstrateCli;
 use chrono::prelude::*;
 use futures::pin_mut;
 use futures::select;
 use futures::{future, future::FutureExt, Future};
 use log::info;
-use sc_service::{AbstractService, Configuration, Role, ServiceBuilderCommand};
+use sc_service::{AbstractService, Configuration, Role, ServiceBuilderCommand, TaskType};
 use sp_runtime::traits::{Block as BlockT, Header as HeaderT};
 use sp_utils::metrics::{TOKIO_THREADS_ALIVE, TOKIO_THREADS_TOTAL};
-use std::fmt::Debug;
-use std::marker::PhantomData;
-use std::sync::Arc;
+use sp_version::RuntimeVersion;
+use std::{fmt::Debug, marker::PhantomData, str::FromStr};
 
 #[cfg(target_family = "unix")]
 async fn main<F, E>(func: F) -> std::result::Result<(), Box<dyn std::error::Error>>
@@ -81,11 +82,11 @@ where
 pub fn build_runtime() -> std::result::Result<tokio::runtime::Runtime, std::io::Error> {
 	tokio::runtime::Builder::new()
 		.threaded_scheduler()
-		.on_thread_start(||{
+		.on_thread_start(|| {
 			TOKIO_THREADS_ALIVE.inc();
 			TOKIO_THREADS_TOTAL.inc();
 		})
-		.on_thread_stop(||{
+		.on_thread_stop(|| {
 			TOKIO_THREADS_ALIVE.dec();
 		})
 		.enable_all()
@@ -116,34 +117,43 @@ impl<C: SubstrateCli> Runner<C> {
 	/// Create a new runtime with the command provided in argument
 	pub fn new<T: CliConfiguration>(cli: &C, command: &T) -> Result<Runner<C>> {
 		let tokio_runtime = build_runtime()?;
+		let runtime_handle = tokio_runtime.handle().clone();
 
-		let task_executor = {
-			let runtime_handle = tokio_runtime.handle().clone();
-			Arc::new(move |fut| {
-				runtime_handle.spawn(fut);
-			})
+		let task_executor = move |fut, task_type| {
+			match task_type {
+				TaskType::Async => { runtime_handle.spawn(fut); }
+				TaskType::Blocking => {
+					runtime_handle.spawn(async move {
+						// `spawn_blocking` is looking for the current runtime, and as such has to
+						// be called from within `spawn`.
+						tokio::task::spawn_blocking(move || futures::executor::block_on(fut))
+					});
+				}
+			}
 		};
 
 		Ok(Runner {
-			config: command.create_configuration(cli, task_executor)?,
+			config: command.create_configuration(cli, task_executor.into())?,
 			tokio_runtime,
 			phantom: PhantomData,
 		})
 	}
 
-	/// A helper function that runs an `AbstractService` with tokio and stops if the process receives
-	/// the signal `SIGTERM` or `SIGINT`.
-	pub fn run_node<FNL, FNF, SL, SF>(
-		self,
-		new_light: FNL,
-		new_full: FNF,
-		runtime_version: sp_version::RuntimeVersion,
-	) -> Result<()> where
-		FNL: FnOnce(Configuration) -> sc_service::error::Result<SL>,
-		FNF: FnOnce(Configuration) -> sc_service::error::Result<SF>,
-		SL: AbstractService + Unpin,
-		SF: AbstractService + Unpin,
-	{
+	/// Log information about the node itself.
+	///
+	/// # Example:
+	///
+	/// ```text
+	/// 2020-06-03 16:14:21 Substrate Node
+	/// 2020-06-03 16:14:21 ✌️  version 2.0.0-rc3-f4940588c-x86_64-linux-gnu
+	/// 2020-06-03 16:14:21 ❤️  by Parity Technologies <admin@parity.io>, 2017-2020
+	/// 2020-06-03 16:14:21 📋 Chain specification: Flaming Fir
+	/// 2020-06-03 16:14:21 🏷  Node name: jolly-rod-7462
+	/// 2020-06-03 16:14:21 👤 Role: FULL
+	/// 2020-06-03 16:14:21 💾 Database: RocksDb at /tmp/c/chains/flamingfir7/db
+	/// 2020-06-03 16:14:21 ⛓  Native runtime: node-251 (substrate-node-1.tx1.au10)
+	/// ```
+	pub fn print_node_infos(&self, runtime_version: RuntimeVersion) {
 		info!("{}", C::impl_name());
 		info!("✌️  version {}", C::impl_version());
 		info!(
@@ -155,12 +165,68 @@ impl<C: SubstrateCli> Runner<C> {
 		info!("📋 Chain specification: {}", self.config.chain_spec.name());
 		info!("🏷  Node name: {}", self.config.network.node_name);
 		info!("👤 Role: {}", self.config.display_role());
+		info!("💾 Database: {} at {}",
+			self.config.database,
+			self.config.database.path().map_or_else(|| "<unknown>".to_owned(), |p| p.display().to_string())
+		);
 		info!("⛓  Native runtime: {}", runtime_version);
+	}
 
+	/// A helper function that runs an `AbstractService` with tokio and stops if the process
+	/// receives the signal `SIGTERM` or `SIGINT`. It can run a full or a light node depending on
+	/// the node's configuration.
+	pub fn run_node<SL, SF>(
+		self,
+		new_light: impl FnOnce(Configuration) -> sc_service::error::Result<SL>,
+		new_full: impl FnOnce(Configuration) -> sc_service::error::Result<SF>,
+		runtime_version: RuntimeVersion,
+	) -> Result<()>
+	where
+		SL: AbstractService + Unpin,
+		SF: AbstractService + Unpin,
+	{
 		match self.config.role {
-			Role::Light => self.run_service_until_exit(new_light),
-			_ => self.run_service_until_exit(new_full),
+			Role::Light => self.run_light_node(new_light, runtime_version),
+			_ => self.run_full_node(new_full, runtime_version),
 		}
+	}
+
+	/// A helper function that runs an `AbstractService` with tokio and stops if the process
+	/// receives the signal `SIGTERM` or `SIGINT`. It can only run a "full" node and will fail if
+	/// the node's configuration uses a "light" role.
+	pub fn run_full_node<S>(
+		self,
+		new_full: impl FnOnce(Configuration) -> sc_service::error::Result<S>,
+		runtime_version: RuntimeVersion,
+	) -> Result<()>
+	where
+		S: AbstractService + Unpin,
+	{
+		if matches!(self.config.role, Role::Light) {
+			return Err("Light node has been requested but this is not implemented".into());
+		}
+
+		self.print_node_infos(runtime_version);
+		self.run_service_until_exit(new_full)
+	}
+
+	/// A helper function that runs an `AbstractService` with tokio and stops if the process
+	/// receives the signal `SIGTERM` or `SIGINT`. It can only run a "light" node and will fail if
+	/// the node's configuration uses a "full" role.
+	pub fn run_light_node<S>(
+		self,
+		new_light: impl FnOnce(Configuration) -> sc_service::error::Result<S>,
+		runtime_version: RuntimeVersion,
+	) -> Result<()>
+	where
+		S: AbstractService + Unpin,
+	{
+		if !matches!(self.config.role, Role::Light) {
+			return Err("Full node has been requested but this is not implemented".into());
+		}
+
+		self.print_node_infos(runtime_version);
+		self.run_service_until_exit(new_light)
 	}
 
 	/// A helper function that runs a future with tokio and stops if the process receives the signal
@@ -170,8 +236,9 @@ impl<C: SubstrateCli> Runner<C> {
 		B: FnOnce(Configuration) -> sc_service::error::Result<BC>,
 		BC: ServiceBuilderCommand<Block = BB> + Unpin,
 		BB: sp_runtime::traits::Block + Debug,
-		<<<BB as BlockT>::Header as HeaderT>::Number as std::str::FromStr>::Err: Debug,
-		<BB as BlockT>::Hash: std::str::FromStr,
+		<<<BB as BlockT>::Header as HeaderT>::Number as FromStr>::Err: Debug,
+		<BB as BlockT>::Hash: FromStr,
+		<<BB as BlockT>::Hash as FromStr>::Err: Debug,
 	{
 		match subcommand {
 			Subcommand::BuildSpec(cmd) => cmd.run(self.config),
@@ -186,6 +253,7 @@ impl<C: SubstrateCli> Runner<C> {
 			}
 			Subcommand::Revert(cmd) => cmd.run(self.config, builder),
 			Subcommand::PurgeChain(cmd) => cmd.run(self.config),
+			Subcommand::ExportState(cmd) => cmd.run(self.config, builder),
 		}
 	}
 
@@ -196,20 +264,25 @@ impl<C: SubstrateCli> Runner<C> {
 	{
 		let service = service_builder(self.config)?;
 
-		let informant_future = sc_informant::build(&service, sc_informant::OutputFormat::Coloured);
-		let _informant_handle = self.tokio_runtime.spawn(informant_future);
-
 		// we eagerly drop the service so that the internal exit future is fired,
 		// but we need to keep holding a reference to the global telemetry guard
 		// and drop the runtime first.
 		let _telemetry = service.telemetry();
 
-		let f = service.fuse();
-		pin_mut!(f);
+		// we hold a reference to the base path so if the base path is a temporary directory it will
+		// not be deleted before the tokio runtime finish to clean up
+		let _base_path = service.base_path();
 
-		self.tokio_runtime
-			.block_on(main(f))
-			.map_err(|e| e.to_string())?;
+		{
+			let f = service.fuse();
+			self.tokio_runtime
+				.block_on(main(f))
+				.map_err(|e| e.to_string())?;
+		}
+
+		// The `service` **must** have been destroyed here for the shutdown signal to propagate
+		// to all the tasks. Dropping `tokio_runtime` will block the thread until all tasks have
+		// shut down.
 		drop(self.tokio_runtime);
 
 		Ok(())
@@ -235,7 +308,7 @@ impl<C: SubstrateCli> Runner<C> {
 	}
 
 	/// Get a mutable reference to the node Configuration
-	pub fn config_mut(&mut self) -> &Configuration {
+	pub fn config_mut(&mut self) -> &mut Configuration {
 		&mut self.config
 	}
 }

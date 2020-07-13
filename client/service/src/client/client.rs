@@ -1,18 +1,20 @@
-// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
-// Substrate is free software: you can redistribute it and/or modify
+// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+
+// This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-// Substrate is distributed in the hope that it will be useful,
+// This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU General Public License for more details.
 
 // You should have received a copy of the GNU General Public License
-// along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 //! Substrate Client
 
@@ -26,8 +28,9 @@ use parking_lot::{Mutex, RwLock};
 use codec::{Encode, Decode};
 use hash_db::Prefix;
 use sp_core::{
-	ChangesTrieConfiguration, convert_hash, traits::CodeExecutor, NativeOrEncoded,
-	storage::{StorageKey, PrefixedStorageKey, StorageData, well_known_keys, ChildInfo},
+	convert_hash,
+	storage::{well_known_keys, ChildInfo, PrefixedStorageKey, StorageData, StorageKey},
+	ChangesTrieConfiguration, ExecutionContext, NativeOrEncoded,
 };
 use sc_telemetry::{telemetry, SUBSTRATE_INFO};
 use sp_runtime::{
@@ -43,7 +46,7 @@ use sp_state_machine::{
 	prove_read, prove_child_read, ChangesTrieRootsStorage, ChangesTrieStorage,
 	ChangesTrieConfigurationRange, key_changes, key_changes_proof,
 };
-use sc_executor::{RuntimeVersion, RuntimeInfo};
+use sc_executor::RuntimeVersion;
 use sp_consensus::{
 	Error as ConsensusError, BlockStatus, BlockImportParams, BlockCheckParams,
 	ImportResult, BlockOrigin, ForkChoiceStrategy, RecordProof,
@@ -61,27 +64,41 @@ use sp_api::{
 	CallApiAtParams,
 };
 use sc_block_builder::{BlockBuilderApi, BlockBuilderProvider};
-use sc_client_api::{backend::{
-	self, BlockImportOperation, PrunableStateChangesTrieStorage,
-	ClientImportOperation, Finalizer, ImportSummary, NewBlockState,
-	changes_tries_state_at_block, StorageProvider,
-	LockImportRun, apply_aux,
-}, client::{
-	ImportNotifications, FinalityNotification, FinalityNotifications, BlockImportNotification,
-	ClientInfo, BlockchainEvents, BlockBackend, ProvideUncles, BadBlocks, ForkBlocks,
-	BlockOf,
-}, execution_extensions::ExecutionExtensions, notifications::{StorageNotifications, StorageEventStream}, KeyIterator, CallExecutor, ExecutorProvider, ProofProvider, CloneableSpawn, cht, in_mem, UsageProvider};
-use sp_utils::mpsc::tracing_unbounded;
+use sc_client_api::{
+	backend::{
+		self, BlockImportOperation, PrunableStateChangesTrieStorage,
+		ClientImportOperation, Finalizer, ImportSummary, NewBlockState,
+		changes_tries_state_at_block, StorageProvider,
+		LockImportRun, apply_aux,
+	},
+	client::{
+		ImportNotifications, FinalityNotification, FinalityNotifications, BlockImportNotification,
+		ClientInfo, BlockchainEvents, BlockBackend, ProvideUncles, BadBlocks, ForkBlocks,
+		BlockOf,
+	},
+	execution_extensions::ExecutionExtensions,
+	notifications::{StorageNotifications, StorageEventStream},
+	KeyIterator, CallExecutor, ExecutorProvider, ProofProvider,
+	cht, UsageProvider
+};
+use sp_utils::mpsc::{TracingUnboundedSender, tracing_unbounded};
 use sp_blockchain::Error;
 use prometheus_endpoint::Registry;
 use super::{
-	genesis, call_executor::LocalCallExecutor,
-	light::{call_executor::prove_execution, fetcher::ChangesProof},
-	block_rules::{BlockRules, LookupResult as BlockLookupResult},
+	genesis, block_rules::{BlockRules, LookupResult as BlockLookupResult},
 };
-use futures::channel::mpsc;
+use sc_light::{call_executor::prove_execution, fetcher::ChangesProof};
+use rand::Rng;
 
-type NotificationSinks<T> = Mutex<Vec<mpsc::UnboundedSender<T>>>;
+#[cfg(feature="test-helpers")]
+use {
+	sp_core::traits::CodeExecutor,
+	sc_client_api::{CloneableSpawn, in_mem},
+	sc_executor::RuntimeInfo,
+	super::call_executor::LocalCallExecutor,
+};
+
+type NotificationSinks<T> = Mutex<Vec<TracingUnboundedSender<T>>>;
 
 /// Substrate Client
 pub struct Client<B, E, Block, RA> where Block: BlockT {
@@ -126,6 +143,7 @@ impl<H> PrePostHeader<H> {
 }
 
 /// Create an instance of in-memory client.
+#[cfg(feature="test-helpers")]
 pub fn new_in_mem<E, Block, S, RA>(
 	executor: E,
 	genesis_storage: &S,
@@ -165,6 +183,7 @@ pub struct ClientConfig {
 
 /// Create a client with the explicitly provided backend.
 /// This is useful for testing backend implementations.
+#[cfg(feature="test-helpers")]
 pub fn new_with_backend<B, E, Block, S, RA>(
 	backend: Arc<B>,
 	executor: E,
@@ -644,8 +663,6 @@ impl<B, E, Block, RA> Client<B, E, Block, RA> where
 
 		if let Ok(ImportResult::Imported(ref aux)) = result {
 			if aux.is_new_best {
-				use rand::Rng;
-
 				// don't send telemetry block import events during initial sync for every
 				// block to avoid spamming the telemetry server, these events will be randomly
 				// sent at a rate of 1/10.
@@ -736,11 +753,6 @@ impl<B, E, Block, RA> Client<B, E, Block, RA> where
 				) = storage_changes.into_inner();
 
 				if self.config.offchain_indexing_api {
-					// if let Some(mut offchain_storage) = self.backend.offchain_storage() {
-					// 	offchain_sc.iter().for_each(|(k,v)| {
-					// 		offchain_storage.set(b"block-import-info", k,v)
-					// 	});
-					// }
 					operation.op.update_offchain_storage(offchain_sc)?;
 				}
 
@@ -769,15 +781,15 @@ impl<B, E, Block, RA> Client<B, E, Block, RA> where
 			NewBlockState::Normal
 		};
 
-		let retracted = if is_new_best {
+		let tree_route = if is_new_best && info.best_hash != parent_hash {
 			let route_from_best = sp_blockchain::tree_route(
 				self.backend.blockchain(),
 				info.best_hash,
 				parent_hash,
 			)?;
-			route_from_best.retracted().iter().rev().map(|e| e.hash.clone()).collect()
+			Some(route_from_best)
 		} else {
-			Vec::default()
+			None
 		};
 
 		trace!(
@@ -808,7 +820,7 @@ impl<B, E, Block, RA> Client<B, E, Block, RA> where
 				header: import_headers.into_post(),
 				is_new_best,
 				storage_changes,
-				retracted,
+				tree_route,
 			})
 		}
 
@@ -847,9 +859,15 @@ impl<B, E, Block, RA> Client<B, E, Block, RA> where
 			// block.
 			(true, ref mut storage_changes @ None, Some(ref body)) => {
 				let runtime_api = self.runtime_api();
+				let execution_context = if import_block.origin == BlockOrigin::NetworkInitialSync {
+					ExecutionContext::Syncing
+				} else {
+					ExecutionContext::Importing
+				};
 
-				runtime_api.execute_block(
+				runtime_api.execute_block_with_context(
 					&at,
+					execution_context,
 					Block::new(import_block.header.clone(), body.clone()),
 				)?;
 
@@ -937,7 +955,7 @@ impl<B, E, Block, RA> Client<B, E, Block, RA> where
 			// we'll send notifications spuriously in that case.
 			const MAX_TO_NOTIFY: usize = 256;
 			let enacted = route_from_finalized.enacted();
-			let start = enacted.len() - ::std::cmp::min(enacted.len(), MAX_TO_NOTIFY);
+			let start = enacted.len() - std::cmp::min(enacted.len(), MAX_TO_NOTIFY);
 			for finalized in &enacted[start..] {
 				operation.notify_finalized.push(finalized.hash);
 			}
@@ -961,14 +979,27 @@ impl<B, E, Block, RA> Client<B, E, Block, RA> where
 			return Ok(());
 		}
 
-		for finalized_hash in notify_finalized {
-			let header = self.header(&BlockId::Hash(finalized_hash))?
-				.expect("header already known to exist in DB because it is indicated in the tree route; qed");
+		// We assume the list is sorted and only want to inform the
+		// telemetry once about the finalized block.
+		if let Some(last) = notify_finalized.last() {
+			let header = self.header(&BlockId::Hash(*last))?
+				.expect(
+					"Header already known to exist in DB because it is \
+					 indicated in the tree route; qed"
+				);
 
 			telemetry!(SUBSTRATE_INFO; "notify.finalized";
 				"height" => format!("{}", header.number()),
-				"best" => ?finalized_hash,
+				"best" => ?last,
 			);
+		}
+
+		for finalized_hash in notify_finalized {
+			let header = self.header(&BlockId::Hash(finalized_hash))?
+				.expect(
+					"Header already known to exist in DB because it is \
+					 indicated in the tree route; qed"
+				);
 
 			let notification = FinalityNotification {
 				header,
@@ -1017,7 +1048,7 @@ impl<B, E, Block, RA> Client<B, E, Block, RA> where
 			origin: notify_import.origin,
 			header: notify_import.header,
 			is_new_best: notify_import.is_new_best,
-			retracted: notify_import.retracted,
+			tree_route: notify_import.tree_route.map(Arc::new),
 		};
 
 		self.import_notification_sinks.lock()
@@ -1321,8 +1352,11 @@ impl<B, E, Block, RA> StorageProvider<Block, B> for Client<B, E, Block, RA> wher
 	}
 
 
-	fn storage(&self, id: &BlockId<Block>, key: &StorageKey) -> sp_blockchain::Result<Option<StorageData>>
-	{
+	fn storage(
+		&self,
+		id: &BlockId<Block>,
+		key: &StorageKey,
+	) -> sp_blockchain::Result<Option<StorageData>> {
 		Ok(self.state_at(id)?
 			.storage(&key.0).map_err(|e| sp_blockchain::Error::from_state(Box::new(e)))?
 			.map(StorageData)
@@ -1330,8 +1364,11 @@ impl<B, E, Block, RA> StorageProvider<Block, B> for Client<B, E, Block, RA> wher
 	}
 
 
-	fn storage_hash(&self, id: &BlockId<Block>, key: &StorageKey) -> sp_blockchain::Result<Option<Block::Hash>>
-	{
+	fn storage_hash(
+		&self,
+		id: &BlockId<Block>,
+		key: &StorageKey,
+	) -> sp_blockchain::Result<Option<Block::Hash>> {
 		Ok(self.state_at(id)?
 			.storage_hash(&key.0).map_err(|e| sp_blockchain::Error::from_state(Box::new(e)))?
 		)

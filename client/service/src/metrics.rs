@@ -1,20 +1,22 @@
-// Copyright 2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
-// Substrate is free software: you can redistribute it and/or modify
+// Copyright (C) 2020 Parity Technologies (UK) Ltd.
+// SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+
+// This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-// Substrate is distributed in the hope that it will be useful,
+// This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU General Public License for more details.
 
 // You should have received a copy of the GNU General Public License
-// along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-use std::convert::TryFrom;
+use std::{convert::TryFrom, time::SystemTime};
 
 use crate::NetworkStatus;
 use prometheus_endpoint::{register, Gauge, U64, F64, Registry, PrometheusError, Opts, GaugeVec};
@@ -23,6 +25,7 @@ use sp_runtime::traits::{NumberFor, Block, SaturatedConversion, UniqueSaturatedI
 use sp_transaction_pool::PoolStatus;
 use sp_utils::metrics::register_globals;
 use sc_client_api::ClientInfo;
+use sc_network::config::Role;
 
 use sysinfo::{self, ProcessExt, SystemExt};
 
@@ -76,6 +79,13 @@ impl PrometheusMetrics {
 		)?, &registry)?.set(roles);
 
 		register_globals(registry)?;
+
+		let start_time_since_epoch = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)
+			.unwrap_or_default();
+		register(Gauge::<U64>::new(
+			"process_start_time_seconds",
+			"Number of seconds between the UNIX epoch and the moment the process started",
+		)?, registry)?.set(start_time_since_epoch.as_secs());
 
 		Ok(Self {
 			// system
@@ -251,10 +261,17 @@ impl MetricsService {
 
 
 impl MetricsService {
-	pub fn with_prometheus(registry: &Registry, name: &str, version: &str, roles: u64)
+	pub fn with_prometheus(registry: &Registry, name: &str, version: &str, role: &Role)
 		-> Result<Self, PrometheusError>
 	{
-		PrometheusMetrics::setup(registry, name, version, roles).map(|p| {
+		let role_bits = match role {
+			Role::Full => 1u64,
+			Role::Light => 2u64,
+			Role::Sentry { .. } => 3u64,
+			Role::Authority { .. } => 4u64,
+		};
+
+		PrometheusMetrics::setup(registry, name, version, role_bits).map(|p| {
 			Self::inner_new(Some(p))
 		})
 	}

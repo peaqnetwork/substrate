@@ -1,18 +1,19 @@
-// Copyright 2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
-// Substrate is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// Copyright (C) 2020 Parity Technologies (UK) Ltd.
+// SPDX-License-Identifier: Apache-2.0
 
-// Substrate is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-
-// You should have received a copy of the GNU General Public License
-// along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// 	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Treasury pallet tests.
 
@@ -59,6 +60,7 @@ parameter_types! {
 	pub const AvailableBlockRatio: Perbill = Perbill::one();
 }
 impl frame_system::Trait for Test {
+	type BaseCallFilter = ();
 	type Origin = Origin;
 	type Index = u64;
 	type BlockNumber = u64;
@@ -74,6 +76,7 @@ impl frame_system::Trait for Test {
 	type DbWeight = ();
 	type BlockExecutionWeight = ();
 	type ExtrinsicBaseWeight = ();
+	type MaximumExtrinsicWeight = MaximumBlockWeight;
 	type AvailableBlockRatio = AvailableBlockRatio;
 	type MaximumBlockLength = MaximumBlockLength;
 	type Version = ();
@@ -110,6 +113,12 @@ impl Contains<u64> for TenToFourteen {
 			members.sort();
 		})
 	}
+}
+impl ContainsLengthBound for TenToFourteen {
+	fn max_len() -> usize {
+		TEN_TO_FOURTEEN.with(|v| v.borrow().len())
+	}
+	fn min_len() -> usize { 0 }
 }
 parameter_types! {
 	pub const ProposalBond: Permill = Permill::from_percent(5);
@@ -263,7 +272,7 @@ fn close_tip_works() {
 		assert_noop!(Treasury::close_tip(Origin::signed(0), h.into()), Error::<Test>::Premature);
 
 		System::set_block_number(2);
-		assert_noop!(Treasury::close_tip(Origin::NONE, h.into()), BadOrigin);
+		assert_noop!(Treasury::close_tip(Origin::none(), h.into()), BadOrigin);
 		assert_ok!(Treasury::close_tip(Origin::signed(0), h.into()));
 		assert_eq!(Balances::free_balance(3), 10);
 
@@ -373,7 +382,7 @@ fn accepted_spend_proposal_ignored_outside_spend_period() {
 		Balances::make_free_balance_be(&Treasury::account_id(), 101);
 
 		assert_ok!(Treasury::propose_spend(Origin::signed(0), 100, 3));
-		assert_ok!(Treasury::approve_proposal(Origin::ROOT, 0));
+		assert_ok!(Treasury::approve_proposal(Origin::root(), 0));
 
 		<Treasury as OnInitialize<u64>>::on_initialize(1);
 		assert_eq!(Balances::free_balance(3), 0);
@@ -400,7 +409,7 @@ fn rejected_spend_proposal_ignored_on_spend_period() {
 		Balances::make_free_balance_be(&Treasury::account_id(), 101);
 
 		assert_ok!(Treasury::propose_spend(Origin::signed(0), 100, 3));
-		assert_ok!(Treasury::reject_proposal(Origin::ROOT, 0));
+		assert_ok!(Treasury::reject_proposal(Origin::root(), 0));
 
 		<Treasury as OnInitialize<u64>>::on_initialize(2);
 		assert_eq!(Balances::free_balance(3), 0);
@@ -414,22 +423,22 @@ fn reject_already_rejected_spend_proposal_fails() {
 		Balances::make_free_balance_be(&Treasury::account_id(), 101);
 
 		assert_ok!(Treasury::propose_spend(Origin::signed(0), 100, 3));
-		assert_ok!(Treasury::reject_proposal(Origin::ROOT, 0));
-		assert_noop!(Treasury::reject_proposal(Origin::ROOT, 0), Error::<Test>::InvalidProposalIndex);
+		assert_ok!(Treasury::reject_proposal(Origin::root(), 0));
+		assert_noop!(Treasury::reject_proposal(Origin::root(), 0), Error::<Test>::InvalidProposalIndex);
 	});
 }
 
 #[test]
 fn reject_non_existent_spend_proposal_fails() {
 	new_test_ext().execute_with(|| {
-		assert_noop!(Treasury::reject_proposal(Origin::ROOT, 0), Error::<Test>::InvalidProposalIndex);
+		assert_noop!(Treasury::reject_proposal(Origin::root(), 0), Error::<Test>::InvalidProposalIndex);
 	});
 }
 
 #[test]
 fn accept_non_existent_spend_proposal_fails() {
 	new_test_ext().execute_with(|| {
-		assert_noop!(Treasury::approve_proposal(Origin::ROOT, 0), Error::<Test>::InvalidProposalIndex);
+		assert_noop!(Treasury::approve_proposal(Origin::root(), 0), Error::<Test>::InvalidProposalIndex);
 	});
 }
 
@@ -439,8 +448,8 @@ fn accept_already_rejected_spend_proposal_fails() {
 		Balances::make_free_balance_be(&Treasury::account_id(), 101);
 
 		assert_ok!(Treasury::propose_spend(Origin::signed(0), 100, 3));
-		assert_ok!(Treasury::reject_proposal(Origin::ROOT, 0));
-		assert_noop!(Treasury::approve_proposal(Origin::ROOT, 0), Error::<Test>::InvalidProposalIndex);
+		assert_ok!(Treasury::reject_proposal(Origin::root(), 0));
+		assert_noop!(Treasury::approve_proposal(Origin::root(), 0), Error::<Test>::InvalidProposalIndex);
 	});
 }
 
@@ -451,7 +460,7 @@ fn accepted_spend_proposal_enacted_on_spend_period() {
 		assert_eq!(Treasury::pot(), 100);
 
 		assert_ok!(Treasury::propose_spend(Origin::signed(0), 100, 3));
-		assert_ok!(Treasury::approve_proposal(Origin::ROOT, 0));
+		assert_ok!(Treasury::approve_proposal(Origin::root(), 0));
 
 		<Treasury as OnInitialize<u64>>::on_initialize(2);
 		assert_eq!(Balances::free_balance(3), 100);
@@ -466,7 +475,7 @@ fn pot_underflow_should_not_diminish() {
 		assert_eq!(Treasury::pot(), 100);
 
 		assert_ok!(Treasury::propose_spend(Origin::signed(0), 150, 3));
-		assert_ok!(Treasury::approve_proposal(Origin::ROOT, 0));
+		assert_ok!(Treasury::approve_proposal(Origin::root(), 0));
 
 		<Treasury as OnInitialize<u64>>::on_initialize(2);
 		assert_eq!(Treasury::pot(), 100); // Pot hasn't changed
@@ -488,13 +497,13 @@ fn treasury_account_doesnt_get_deleted() {
 		let treasury_balance = Balances::free_balance(&Treasury::account_id());
 
 		assert_ok!(Treasury::propose_spend(Origin::signed(0), treasury_balance, 3));
-		assert_ok!(Treasury::approve_proposal(Origin::ROOT, 0));
+		assert_ok!(Treasury::approve_proposal(Origin::root(), 0));
 
 		<Treasury as OnInitialize<u64>>::on_initialize(2);
 		assert_eq!(Treasury::pot(), 100); // Pot hasn't changed
 
 		assert_ok!(Treasury::propose_spend(Origin::signed(0), Treasury::pot(), 3));
-		assert_ok!(Treasury::approve_proposal(Origin::ROOT, 1));
+		assert_ok!(Treasury::approve_proposal(Origin::root(), 1));
 
 		<Treasury as OnInitialize<u64>>::on_initialize(4);
 		assert_eq!(Treasury::pot(), 0); // Pot is emptied
@@ -518,9 +527,9 @@ fn inexistent_account_works() {
 		assert_eq!(Treasury::pot(), 0); // Pot is empty
 
 		assert_ok!(Treasury::propose_spend(Origin::signed(0), 99, 3));
-		assert_ok!(Treasury::approve_proposal(Origin::ROOT, 0));
+		assert_ok!(Treasury::approve_proposal(Origin::root(), 0));
 		assert_ok!(Treasury::propose_spend(Origin::signed(0), 1, 3));
-		assert_ok!(Treasury::approve_proposal(Origin::ROOT, 1));
+		assert_ok!(Treasury::approve_proposal(Origin::root(), 1));
 		<Treasury as OnInitialize<u64>>::on_initialize(2);
 		assert_eq!(Treasury::pot(), 0); // Pot hasn't changed
 		assert_eq!(Balances::free_balance(3), 0); // Balance of `3` hasn't changed

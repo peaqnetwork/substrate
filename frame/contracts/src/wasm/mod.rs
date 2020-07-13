@@ -162,6 +162,7 @@ mod tests {
 	use hex_literal::hex;
 	use assert_matches::assert_matches;
 	use sp_runtime::DispatchError;
+	use frame_support::weights::Weight;
 
 	const GAS_LIMIT: Gas = 10_000_000_000;
 
@@ -229,11 +230,8 @@ mod tests {
 		fn get_storage(&self, key: &StorageKey) -> Option<Vec<u8>> {
 			self.storage.get(key).cloned()
 		}
-		fn set_storage(&mut self, key: StorageKey, value: Option<Vec<u8>>)
-			-> Result<(), &'static str>
-		{
+		fn set_storage(&mut self, key: StorageKey, value: Option<Vec<u8>>) {
 			*self.storage.entry(key).or_insert(Vec::new()) = value.unwrap_or(Vec::new());
-			Ok(())
 		}
 		fn instantiate(
 			&mut self,
@@ -304,19 +302,20 @@ mod tests {
 		fn note_dispatch_call(&mut self, call: Call) {
 			self.dispatches.push(DispatchEntry(call));
 		}
-		fn note_restore_to(
+		fn restore_to(
 			&mut self,
 			dest: u64,
 			code_hash: H256,
 			rent_allowance: u64,
 			delta: Vec<StorageKey>,
-		) {
+		) -> Result<(), &'static str> {
 			self.restores.push(RestoreEntry {
 				dest,
 				code_hash,
 				rent_allowance,
 				delta,
 			});
+			Ok(())
 		}
 		fn caller(&self) -> &u64 {
 			&42
@@ -375,8 +374,8 @@ mod tests {
 				)
 			)
 		}
-		fn get_weight_price(&self) -> BalanceOf<Self::T> {
-			1312_u32.into()
+		fn get_weight_price(&self, weight: Weight) -> BalanceOf<Self::T> {
+			BalanceOf::<Self::T>::from(1312_u32).saturating_mul(weight.into())
 		}
 	}
 
@@ -386,9 +385,7 @@ mod tests {
 		fn get_storage(&self, key: &[u8; 32]) -> Option<Vec<u8>> {
 			(**self).get_storage(key)
 		}
-		fn set_storage(&mut self, key: [u8; 32], value: Option<Vec<u8>>)
-			-> Result<(), &'static str>
-		{
+		fn set_storage(&mut self, key: [u8; 32], value: Option<Vec<u8>>) {
 			(**self).set_storage(key, value)
 		}
 		fn instantiate(
@@ -427,14 +424,14 @@ mod tests {
 		fn note_dispatch_call(&mut self, call: Call) {
 			(**self).note_dispatch_call(call)
 		}
-		fn note_restore_to(
+		fn restore_to(
 			&mut self,
 			dest: u64,
 			code_hash: H256,
 			rent_allowance: u64,
 			delta: Vec<StorageKey>,
-		) {
-			(**self).note_restore_to(
+		) -> Result<(), &'static str> {
+			(**self).restore_to(
 				dest,
 				code_hash,
 				rent_allowance,
@@ -483,8 +480,8 @@ mod tests {
 		fn get_runtime_storage(&self, key: &[u8]) -> Option<Vec<u8>> {
 			(**self).get_runtime_storage(key)
 		}
-		fn get_weight_price(&self) -> BalanceOf<Self::T> {
-			(**self).get_weight_price()
+		fn get_weight_price(&self, weight: Weight) -> BalanceOf<Self::T> {
+			(**self).get_weight_price(weight)
 		}
 	}
 
@@ -1060,7 +1057,7 @@ mod tests {
 
 	const CODE_GAS_PRICE: &str = r#"
 (module
-	(import "env" "ext_gas_price" (func $ext_gas_price))
+	(import "env" "ext_gas_price" (func $ext_gas_price (param i64)))
 	(import "env" "ext_scratch_size" (func $ext_scratch_size (result i32)))
 	(import "env" "ext_scratch_read" (func $ext_scratch_read (param i32 i32 i32)))
 	(import "env" "memory" (memory 1 1))
@@ -1076,7 +1073,7 @@ mod tests {
 
 	(func (export "call")
 		;; This stores the gas price in the scratch buffer
-		(call $ext_gas_price)
+		(call $ext_gas_price (i64.const 1))
 
 		;; assert $ext_scratch_size == 8
 		(call $assert
