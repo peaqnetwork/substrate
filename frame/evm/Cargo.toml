@@ -1,6 +1,6 @@
 [package]
 name = "pallet-evm"
-version = "2.0.0-rc5"
+version = "2.0.0-rc6"
 authors = ["Parity Technologies <admin@parity.io>"]
 edition = "2018"
 license = "Apache-2.0"
@@ -23,7 +23,7 @@ sp-core = { default-features = false, git = "https://github.com/paritytech/subst
 sp-runtime = { default-features = false, git = "https://github.com/paritytech/substrate", branch = "rococo-branch" }
 sp-std = { default-features = false, git = "https://github.com/paritytech/substrate", branch = "rococo-branch" }
 sp-io = { default-features = false, git = "https://github.com/paritytech/substrate", branch = "rococo-branch" }
-primitive-types = { version = "0.7.0", default-features = false, features = ["rlp"] }
+primitive-types = { version = "0.7.0", default-features = false, features = ["rlp", "byteorder"] }
 rlp = { version = "0.4", default-features = false }
 evm = { version = "0.17", default-features = false }
 sha3 = { version = "0.8", default-features = false }
