@@ -79,7 +79,7 @@ impl<'vicinity, T: Trait> BackendT for Backend<'vicinity, T> {
 	}
 
 	fn block_timestamp(&self) -> U256 {
-		let now: u128 = pallet_timestamp::Module::<T>::get().unique_saturated_into();
+		let now: u128 = pallet_timestamp::Module::<T>::get().unique_saturated_into() / 1000;
 		U256::from(now)
 	}
 
