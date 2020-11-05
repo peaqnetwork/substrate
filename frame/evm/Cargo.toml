@@ -23,9 +23,12 @@ sp-core = { default-features = false, git = "https://github.com/paritytech/subst
 sp-runtime = { default-features = false, git = "https://github.com/paritytech/substrate", branch = "rococo-branch" }
 sp-std = { default-features = false, git = "https://github.com/paritytech/substrate", branch = "rococo-branch" }
 sp-io = { default-features = false, git = "https://github.com/paritytech/substrate", branch = "rococo-branch" }
+sp-evm = { default-features = false, git = "https://github.com/purestake/substrate", branch = "tgmichel-chainlink" }
 primitive-types = { version = "0.7.0", default-features = false, features = ["rlp", "byteorder"] }
 rlp = { version = "0.4", default-features = false }
-evm = { version = "0.17", default-features = false }
+evm = { version = "0.18", default-features = false, features = ["with-codec"] }
+evm-runtime = { version = "0.18", default-features = false }
+evm-gasometer = { version = "0.18", default-features = false }
 sha3 = { version = "0.8", default-features = false }
 impl-trait-for-tuples = "0.1"
 ripemd160 = { version = "0.9", default-features = false }
@@ -42,10 +45,14 @@ std = [
 	"pallet-balances/std",
 	"sp-io/std",
 	"sp-std/std",
+	"sp-evm/std",
 	"sha3/std",
 	"rlp/std",
 	"primitive-types/std",
 	"evm/std",
+	"evm/with-serde",
+	"evm-runtime/std",
+	"evm-gasometer/std",
 	"pallet-timestamp/std",
 	"ripemd160/std",
 ]
