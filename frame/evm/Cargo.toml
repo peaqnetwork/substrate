@@ -23,7 +23,7 @@ sp-core = { default-features = false, git = "https://github.com/paritytech/subst
 sp-runtime = { default-features = false, git = "https://github.com/paritytech/substrate", branch = "rococo-branch" }
 sp-std = { default-features = false, git = "https://github.com/paritytech/substrate", branch = "rococo-branch" }
 sp-io = { default-features = false, git = "https://github.com/paritytech/substrate", branch = "rococo-branch" }
-sp-evm = { default-features = false, git = "https://github.com/purestake/substrate", branch = "tgmichel-rococo-branch" }
+sp-evm = { default-features = false, git = "https://github.com/purestake/substrate", branch = "v0.3-hotfixes" }
 primitive-types = { version = "0.7.0", default-features = false, features = ["rlp", "byteorder"] }
 rlp = { version = "0.4", default-features = false }
 evm = { version = "0.18", default-features = false, features = ["with-codec"] }
