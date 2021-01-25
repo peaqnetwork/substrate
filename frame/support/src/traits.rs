@@ -496,6 +496,12 @@ pub trait Contains<T: Ord> {
 	fn add(_t: &T) { unimplemented!() }
 }
 
+impl<T: Ord, G: Get<T>> Contains<T> for G {
+	fn sorted_members() -> Vec<T> {
+		vec![G::get()]
+	}
+}
+
 /// A trait for querying bound for the length of an implementation of `Contains`
 pub trait ContainsLengthBound {
 	/// Minimum number of elements contained
