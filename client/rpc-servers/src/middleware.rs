@@ -18,9 +18,11 @@
 
 //! Middleware for RPC requests.
 
+use std::{sync::atomic::{AtomicUsize, Ordering::SeqCst}, time::Instant};
+
 use jsonrpc_core::{
-	Middleware as RequestMiddleware, Metadata,
-	Request, Response, FutureResponse, FutureOutput
+	Call, FutureOutput, FutureResponse, Id, Metadata, Middleware as RequestMiddleware,
+	Output, Request, Response
 };
 use prometheus_endpoint::{
 	Registry, CounterVec, PrometheusError,
@@ -28,6 +30,7 @@ use prometheus_endpoint::{
 };
 
 use futures::{future::Either, Future};
+
 
 /// Metrics for RPC middleware
 #[derive(Debug, Clone)]
@@ -59,6 +62,7 @@ impl RpcMetrics {
 pub struct RpcMiddleware {
 	metrics: RpcMetrics,
 	transport_label: String,
+	counter: AtomicUsize,
 }
 
 impl RpcMiddleware {
@@ -70,6 +74,7 @@ impl RpcMiddleware {
 		RpcMiddleware {
 			metrics,
 			transport_label: String::from(transport_label),
+			counter: AtomicUsize::new(0),
 		}
 	}
 }
@@ -88,5 +93,79 @@ impl<M: Metadata> RequestMiddleware<M> for RpcMiddleware {
 		}
 
 		Either::B(next(request, meta))
+	}
+
+	fn on_call<F, X>(&self, mut call: Call, meta: M, next: F) -> Either<Self::CallFuture, X>
+	where
+		F: Fn(Call, M) -> X + Send + Sync,
+		X: Future<Item = Option<Output>, Error = ()> + Send + 'static,
+	{
+		let start = Instant::now();
+		let mut method_name = String::new();
+		let mut server_id = 0;
+		if log::log_enabled!(target: "rpc-intercept", log::Level::Debug) {
+			server_id = self.counter.fetch_add(1, SeqCst);
+			let req_id = match call {
+				Call::MethodCall(ref mut method) => {
+					method_name = method.method.to_owned();
+					method.id.clone()
+				}
+				Call::Notification(ref notif) => {
+					method_name = notif.method.to_owned();
+					Id::Null
+				},
+				Call::Invalid { ref mut id } => id.to_owned(),
+			};
+			if log::log_enabled!(target: "rpc-intercept", log::Level::Trace) {
+				let len = serde_json::to_string(&call).unwrap().len();
+				log::trace!(
+					target: "rpc-intercept",
+					"Request [id: {} - server_id: {} - method: {} - {} bytes]",
+					id_to_string(&req_id),
+					server_id,
+					method_name,
+					len
+				);
+			}
+		}
+
+		Either::A(Box::new(next(call, meta).map(move |response_opt| {
+			if log::log_enabled!(target: "rpc-intercept", log::Level::Debug) {
+				if let Some(ref response) = response_opt {
+					let len = serde_json::to_string(response).unwrap().len();
+
+					match response {
+						Output::Success(success) => log::debug!(
+							target: "rpc-intercept",
+							"Response [id: {} - server_id: {} - method: {} - {} bytes - Processing took {} ms]: success",
+							id_to_string(&success.id),
+							server_id,
+							method_name,
+							len,
+							start.elapsed().as_millis()
+						),
+						Output::Failure(failure) => log::error!(
+							target: "rpc-intercept",
+							"Response [id: {:?} - server_id: {} - method: {} - {} bytes - Processing took {} ms]: {}",
+							id_to_string(&failure.id),
+							server_id,
+							method_name,
+							len,
+							start.elapsed().as_millis(),
+							failure.error
+						),
+					}
+				};
+			}
+			response_opt
+		})))
+	}
+}
+
+fn id_to_string(id: &Id) -> String {
+	match id {
+		Id::Num(id) => { id.to_string() },
+		Id::Str(id) => { id.to_owned() },
+		Id::Null => { "null".to_owned() }
 	}
 }
