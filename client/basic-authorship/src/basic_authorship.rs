@@ -331,7 +331,6 @@ where
 
 		// proceed with transactions
 		let block_timer = time::Instant::now();
-		let mut skipped = 0;
 		let mut unqueue_invalid = Vec::new();
 
 		let mut t1 = self.transaction_pool.ready_at(self.parent_number).fuse();
@@ -385,13 +384,6 @@ where
 						if e.exhausted_resources() => {
 					debug!("Transaction would exhaust the resources, so we skip it.");
 				}
-				Err(e) if skipped > 0 => {
-					trace!(
-						"[{:?}] Ignoring invalid transaction when skipping: {}",
-						pending_tx_hash,
-						e
-					);
-				},
 				Err(e) => {
 					debug!("[{:?}] Invalid transaction: {}", pending_tx_hash, e);
 					unqueue_invalid.push(pending_tx_hash);
