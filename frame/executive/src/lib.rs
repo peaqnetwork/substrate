@@ -353,6 +353,32 @@ where
 		}
 	}
 
+	/// Actually execute all transitions for `block` but without final checks
+	pub fn execute_block_without_final_checks(block: Block) {
+		sp_io::init_tracing();
+		sp_tracing::within_span! {
+			sp_tracing::info_span!("execute_block", ?block);
+
+			Self::initialize_block(block.header());
+
+			// any initial checks
+			Self::initial_checks(&block);
+			let signature_batching = sp_runtime::SignatureBatching::start();
+
+			// execute extrinsics
+			let (header, extrinsics) = block.deconstruct();
+			Self::execute_extrinsics_with_book_keeping(extrinsics, *header.number());
+
+			if !signature_batching.verify() {
+				panic!("Signature verification failed.");
+			}
+
+			// Finalize block
+			sp_tracing::enter_span!(sp_tracing::Level::TRACE, "finalize");
+			let _ = <frame_system::Pallet<System>>::finalize();
+		}
+	}
+
 	/// Execute given extrinsics and take care of post-extrinsics book-keeping.
 	fn execute_extrinsics_with_book_keeping(
 		extrinsics: Vec<Block::Extrinsic>,
