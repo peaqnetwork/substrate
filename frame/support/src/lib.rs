@@ -60,6 +60,7 @@ pub mod inherent;
 pub mod error;
 pub mod instances;
 pub mod migrations;
+pub mod signed_extensions;
 pub mod traits;
 pub mod weights;
 
