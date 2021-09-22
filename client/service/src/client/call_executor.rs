@@ -93,6 +93,7 @@ where
 		Block: BlockT,
 		B: backend::Backend<Block>,
 	{
+		let start = std::time::Instant::now();
 		let spec = self.runtime_version(id)?.spec_version;
 		let code = if let Some(d) = self
 			.wasm_override
@@ -113,7 +114,8 @@ where
 			);
 			onchain_code
 		};
-
+		let elapsed = start.elapsed();
+		println!("[check_override] took {:?}", elapsed);
 		Ok(code)
 	}
 }
@@ -157,10 +159,12 @@ where
 			backend::changes_tries_state_at_block(at, self.backend.changes_trie_storage())?;
 		let state = self.backend.state_at(*at)?;
 		let state_runtime_code = sp_state_machine::backend::BackendRuntimeCode::new(&state);
-		let runtime_code =
+		let mut runtime_code =
 			state_runtime_code.runtime_code().map_err(sp_blockchain::Error::RuntimeCode)?;
 
-		let runtime_code = self.check_override(runtime_code, at)?;
+		if method == "DebugRuntimeApi_trace_transaction" || method == "DebugRuntimeApi_trace_block" {
+			runtime_code = self.check_override(runtime_code, at)?;
+		}
 
 		let at_hash = self.backend.blockchain().block_hash_from_id(at)?.ok_or_else(|| {
 			sp_blockchain::Error::UnknownBlock(format!("Could not find block hash for {:?}", at))
@@ -224,10 +228,13 @@ where
 		// recorder to not record it. We also need to fetch the runtime code from `state` to
 		// make sure we use the caching layers.
 		let state_runtime_code = sp_state_machine::backend::BackendRuntimeCode::new(&state);
-
-		let runtime_code =
+		
+		let mut runtime_code =
 			state_runtime_code.runtime_code().map_err(sp_blockchain::Error::RuntimeCode)?;
-		let runtime_code = self.check_override(runtime_code, at)?;
+
+		if method == "DebugRuntimeApi_trace_transaction" || method == "DebugRuntimeApi_trace_block" {
+			runtime_code = self.check_override(runtime_code, at)?;
+		}
 
 		match recorder {
 			Some(recorder) => {
