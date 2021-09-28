@@ -358,7 +358,17 @@ where
 		debug!("Pool status: {:?}", self.transaction_pool.status());
 		let mut transaction_pushed = false;
 
+		let mut i = 0;
+		let mut tx_queue = Vec::new();
 		for pending_tx in pending_iterator {
+			if (i > 500) {
+				break;
+			}
+			i = i + 1;
+			tx_queue.push(pending_tx);
+		}
+
+		for pending_tx in tx_queue {
 			if (self.now)() > deadline {
 				debug!(
 					"Consensus deadline reached when pushing block transactions, \
