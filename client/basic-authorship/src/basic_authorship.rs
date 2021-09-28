@@ -307,15 +307,12 @@ where
 		inherent_digests: DigestFor<Block>,
 		deadline: time::Instant,
 		block_size_limit: Option<usize>,
-	) -> Result<Proposal<Block, backend::TransactionFor<B, Block>, PR::Proof>, sp_blockchain::Error>
-	{
-		/// If the block is full we will attempt to push at most
-		/// this number of transactions before quitting for real.
-		/// It allows us to increase block utilization.
-		const MAX_SKIPPED_TRANSACTIONS: usize = 8;
-
-		let mut block_builder =
-			self.client.new_block_at(&self.parent_id, inherent_digests, PR::ENABLED)?;
+	) -> Result<Proposal<Block, backend::TransactionFor<B, Block>, PR::Proof>, sp_blockchain::Error> {
+		let mut block_builder = self.client.new_block_at(
+			&self.parent_id,
+			inherent_digests,
+			PR::ENABLED,
+		)?;
 
 		for inherent in block_builder.create_inherents(inherent_data)? {
 			match block_builder.push(inherent) {
@@ -337,7 +334,6 @@ where
 
 		// proceed with transactions
 		let block_timer = time::Instant::now();
-		let mut skipped = 0;
 		let mut unqueue_invalid = Vec::new();
 
 		let mut t1 = self.transaction_pool.ready_at(self.parent_number).fuse();
@@ -361,7 +357,6 @@ where
 		debug!("Attempting to push transactions from the pool.");
 		debug!("Pool status: {:?}", self.transaction_pool.status());
 		let mut transaction_pushed = false;
-		let mut hit_block_size_limit = false;
 
 		for pending_tx in pending_iterator {
 			if (self.now)() > deadline {
@@ -378,19 +373,8 @@ where
 			let block_size =
 				block_builder.estimate_block_size(self.include_proof_in_block_size_estimation);
 			if block_size + pending_tx_data.encoded_size() > block_size_limit {
-				if skipped < MAX_SKIPPED_TRANSACTIONS {
-					skipped += 1;
-					debug!(
-						"Transaction would overflow the block size limit, \
-						 but will try {} more transactions before quitting.",
-						MAX_SKIPPED_TRANSACTIONS - skipped,
-					);
-					continue
-				} else {
-					debug!("Reached block size limit, proceeding with proposing.");
-					hit_block_size_limit = true;
-					break
-				}
+				debug!("Transaction would overflow the block size limit, so we skip it.");
+				continue;
 			}
 
 			trace!("[{:?}] Pushing to the block.", pending_tx_hash);
@@ -398,26 +382,11 @@ where
 				Ok(()) => {
 					transaction_pushed = true;
 					debug!("[{:?}] Pushed to the block.", pending_tx_hash);
-				},
-				Err(ApplyExtrinsicFailed(Validity(e))) if e.exhausted_resources() => {
-					if skipped < MAX_SKIPPED_TRANSACTIONS {
-						skipped += 1;
-						debug!(
-							"Block seems full, but will try {} more transactions before quitting.",
-							MAX_SKIPPED_TRANSACTIONS - skipped,
-						);
-					} else {
-						debug!("Block is full, proceed with proposing.");
-						break
-					}
-				},
-				Err(e) if skipped > 0 => {
-					trace!(
-						"[{:?}] Ignoring invalid transaction when skipping: {}",
-						pending_tx_hash,
-						e
-					);
-				},
+				}
+				Err(ApplyExtrinsicFailed(Validity(e)))
+						if e.exhausted_resources() => {
+					debug!("Transaction would exhaust the resources, so we skip it.");
+				}
 				Err(e) => {
 					debug!("[{:?}] Invalid transaction: {}", pending_tx_hash, e);
 					unqueue_invalid.push(pending_tx_hash);
@@ -425,11 +394,8 @@ where
 			}
 		}
 
-		if hit_block_size_limit && !transaction_pushed {
-			warn!(
-				"Hit block size limit of `{}` without including any transaction!",
-				block_size_limit,
-			);
+		if !transaction_pushed {
+			warn!("No transaction were included!");
 		}
 
 		self.transaction_pool.remove_invalid(&unqueue_invalid);
