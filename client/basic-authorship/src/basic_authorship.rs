@@ -31,7 +31,7 @@ use log::{debug, error, info, trace, warn};
 use sc_block_builder::{BlockBuilderApi, BlockBuilderProvider};
 use sc_client_api::backend;
 use sc_telemetry::{telemetry, TelemetryHandle, CONSENSUS_INFO};
-use sc_transaction_pool_api::{InPoolTransaction, TransactionPool};
+use sc_transaction_pool_api::{InPoolTransaction, TransactionPool, TransactionTag};
 use sp_api::{ApiExt, ProvideRuntimeApi};
 use sp_blockchain::{ApplyExtrinsicFailed::Validity, Error::ApplyExtrinsicFailed, HeaderBackend};
 use sp_consensus::{
@@ -43,7 +43,7 @@ use sp_runtime::{
 	generic::BlockId,
 	traits::{BlakeTwo256, Block as BlockT, DigestFor, Hash as HashT, Header as HeaderT},
 };
-use std::{marker::PhantomData, pin::Pin, sync::Arc, time};
+use std::{collections::HashSet, marker::PhantomData, pin::Pin, sync::Arc, time};
 
 use prometheus_endpoint::Registry as PrometheusRegistry;
 use sc_proposer_metrics::MetricsLink as PrometheusMetrics;
@@ -363,6 +363,12 @@ where
 		let mut transaction_pushed = false;
 		let mut hit_block_size_limit = false;
 
+		// Since extrinsics can be skipped, extrinsics depending on them should be skipped too.
+		// For that we store the set of all `TransactionTag` that non-skipped extrinsics provided,
+		// and before inserting a new one we check that all its `TransactionTag` requirements are in
+		// this set.
+		let mut inserted_tags = HashSet::<TransactionTag>::new();
+
 		while let Some(pending_tx) = pending_iterator.next() {
 			if (self.now)() > deadline {
 				debug!(
@@ -394,11 +400,28 @@ where
 				}
 			}
 
+			// We need to check this extrinsic don't depend on a skipped transaction.
+			// We iterate over every `require` and check if it is part of the set.
+			// Since `find` short-circuits on `true` value, a missing requirement will
+			// skip checking more requirements.
+			if pending_tx.requires().iter().find(|&tag| !inserted_tags.contains(tag)).is_some() {
+				debug!(
+					"Transaction depends on a previously skipped transaction, so we skip it too."
+				);
+				continue
+			}
+
 			trace!("[{:?}] Pushing to the block.", pending_tx_hash);
 			match sc_block_builder::BlockBuilder::push(&mut block_builder, pending_tx_data) {
 				Ok(()) => {
 					transaction_pushed = true;
 					debug!("[{:?}] Pushed to the block.", pending_tx_hash);
+
+					// Transaction is in the block : we insert the tags it provides into
+					// the inserted tags set.
+					for tag in pending_tx.provides().to_vec() {
+						inserted_tags.insert(tag);
+					}
 				},
 				Err(ApplyExtrinsicFailed(Validity(e))) if e.exhausted_resources() => {
 					pending_iterator.report_invalid(&pending_tx);
