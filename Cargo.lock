@@ -4724,6 +4724,7 @@ dependencies = [
  "pallet-vesting",
  "parity-scale-codec",
  "scale-info",
+ "serde",
  "sp-api",
  "sp-authority-discovery",
  "sp-block-builder",
