@@ -120,11 +120,15 @@ pub async fn seal_block<B, BI, SC, C, E, TP, CIDP>(
 			.await?;
 		let inherents_len = inherent_data.len();
 
+		println!("Just about to generate digests");
 		let digest = if let Some(digest_provider) = digest_provider {
+			println!("detected provider");
 			digest_provider.create_digest(&parent, &inherent_data)?
 		} else {
+			println!("Oh no, no provider detected!!!!!!!!");
 			Default::default()
 		};
+		println!("The digest thatwill be passed to the proposer is {:?}", digest);
 
 		let proposal = proposer
 			.propose(
@@ -135,6 +139,7 @@ pub async fn seal_block<B, BI, SC, C, E, TP, CIDP>(
 			)
 			.map_err(|err| Error::StringError(format!("{:?}", err)))
 			.await?;
+		println!("got a proposal. it is {:?}", proposal);
 
 		if proposal.block.extrinsics().len() == inherents_len && !create_empty {
 			return Err(Error::EmptyTransactionPool)
