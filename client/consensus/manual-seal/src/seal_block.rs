@@ -139,7 +139,7 @@ pub async fn seal_block<B, BI, SC, C, E, TP, CIDP>(
 			)
 			.map_err(|err| Error::StringError(format!("{:?}", err)))
 			.await?;
-		println!("got a proposal. it is {:?}", proposal);
+		println!("got a proposal.");
 
 		if proposal.block.extrinsics().len() == inherents_len && !create_empty {
 			return Err(Error::EmptyTransactionPool)
@@ -155,6 +155,7 @@ pub async fn seal_block<B, BI, SC, C, E, TP, CIDP>(
 		));
 
 		if let Some(digest_provider) = digest_provider {
+			println!("detected a provider again for appending block import. Ours shouldn't do anything");
 			digest_provider.append_block_import(&parent, &mut params, &inherent_data)?;
 		}
 
