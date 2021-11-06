@@ -361,7 +361,7 @@ where
 		let mut i = 0;
 		let mut tx_queue = Vec::new();
 		for pending_tx in pending_iterator {
-			if (i > 2000) {
+			if i > 2000 {
 				break;
 			}
 			i = i + 1;
@@ -418,8 +418,9 @@ where
 		});
 
 		info!(
-			"🎁 Prepared block for proposing at {} [hash: {:?}; parent_hash: {}; extrinsics ({}): [{}]]",
+			"🎁 Prepared block for proposing at {} ({} ms)[hash: {:?}; parent_hash: {}; extrinsics ({}): [{}]]",
 			block.header().number(),
+			block_timer.elapsed().as_millis(),
 			<Block as BlockT>::Hash::from(block.header().hash()),
 			block.header().parent_hash(),
 			block.extrinsics().len(),
