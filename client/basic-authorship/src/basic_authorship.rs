@@ -31,7 +31,7 @@ use log::{debug, error, info, trace, warn};
 use sc_block_builder::{BlockBuilderApi, BlockBuilderProvider};
 use sc_client_api::backend;
 use sc_telemetry::{telemetry, TelemetryHandle, CONSENSUS_INFO};
-use sc_transaction_pool_api::{InPoolTransaction, TransactionPool};
+use sc_transaction_pool_api::{InPoolTransaction, TransactionPool, TransactionTag};
 use sp_api::{ApiExt, ProvideRuntimeApi};
 use sp_blockchain::{ApplyExtrinsicFailed::Validity, Error::ApplyExtrinsicFailed, HeaderBackend};
 use sp_consensus::{
@@ -43,7 +43,7 @@ use sp_runtime::{
 	generic::BlockId,
 	traits::{BlakeTwo256, Block as BlockT, DigestFor, Hash as HashT, Header as HeaderT},
 };
-use std::{marker::PhantomData, pin::Pin, sync::Arc, time};
+use std::{collections::HashSet, marker::PhantomData, pin::Pin, sync::Arc, time};
 
 use prometheus_endpoint::Registry as PrometheusRegistry;
 use sc_proposer_metrics::MetricsLink as PrometheusMetrics;
@@ -307,12 +307,10 @@ where
 		inherent_digests: DigestFor<Block>,
 		deadline: time::Instant,
 		block_size_limit: Option<usize>,
-	) -> Result<Proposal<Block, backend::TransactionFor<B, Block>, PR::Proof>, sp_blockchain::Error> {
-		let mut block_builder = self.client.new_block_at(
-			&self.parent_id,
-			inherent_digests,
-			PR::ENABLED,
-		)?;
+	) -> Result<Proposal<Block, backend::TransactionFor<B, Block>, PR::Proof>, sp_blockchain::Error>
+	{
+		let mut block_builder =
+			self.client.new_block_at(&self.parent_id, inherent_digests, PR::ENABLED)?;
 
 		for inherent in block_builder.create_inherents(inherent_data)? {
 			match block_builder.push(inherent) {
@@ -358,15 +356,18 @@ where
 		debug!("Pool status: {:?}", self.transaction_pool.status());
 		let mut transaction_pushed = false;
 
-		let mut i = 0;
-		let mut tx_queue = Vec::new();
-		for pending_tx in pending_iterator {
-			if i > 2000 {
-				break;
-			}
-			i = i + 1;
-			tx_queue.push(pending_tx);
-		}
+		// Background tasks seems to remove valid extrinsics from `pending_iterator`.
+		// We decide to collect at most 500 to freeze this list.
+		let tx_queue: Vec<_> = pending_iterator.into_iter().take(2000).collect();
+
+		// Since extrinsics can be skipped, extrinsics depending on them should be skipped too.
+		// This is normally performed by the iterator, but don't occur since we collect it
+		// early.
+		//
+		// For that reason we store the set of all `TransactionTag` that non-skipped extrinsics
+		// provided, and before inserting a new one we check that all its `TransactionTag`
+		// requirements are in this set.
+		let mut inserted_tags = HashSet::<TransactionTag>::new();
 
 		for pending_tx in tx_queue {
 			if (self.now)() > deadline {
@@ -384,7 +385,21 @@ where
 				block_builder.estimate_block_size(self.include_proof_in_block_size_estimation);
 			if block_size + pending_tx_data.encoded_size() > block_size_limit {
 				debug!("Transaction would overflow the block size limit, so we skip it.");
-				continue;
+				continue
+			}
+
+			// We need to check this extrinsic don't depend on a skipped transaction.
+			// We iterate over every `require` and check if it is part of the set.
+			// Since `find` short-circuits on `true` value, a missing requirement will
+			// skip checking more requirements.
+			let skipped_requirement =
+				pending_tx.requires().iter().find(|&tag| !inserted_tags.contains(tag)).is_some();
+
+			if skipped_requirement {
+				debug!(
+					"Transaction depends on a previously skipped transaction, so we skip it too."
+				);
+				continue
 			}
 
 			trace!("[{:?}] Pushing to the block.", pending_tx_hash);
@@ -392,11 +407,17 @@ where
 				Ok(()) => {
 					transaction_pushed = true;
 					debug!("[{:?}] Pushed to the block.", pending_tx_hash);
-				}
-				Err(ApplyExtrinsicFailed(Validity(e)))
-						if e.exhausted_resources() => {
+
+					// Transaction is in the block, we insert the tags it provided into
+					// the inserted tags set.
+					let tags = pending_tx.provides().to_vec();
+					for tag in tags {
+						inserted_tags.insert(tag);
+					}
+				},
+				Err(ApplyExtrinsicFailed(Validity(e))) if e.exhausted_resources() => {
 					debug!("Transaction would exhaust the resources, so we skip it.");
-				}
+				},
 				Err(e) => {
 					debug!("[{:?}] Invalid transaction: {}", pending_tx_hash, e);
 					unqueue_invalid.push(pending_tx_hash);
