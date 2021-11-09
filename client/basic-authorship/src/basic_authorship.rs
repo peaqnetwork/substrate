@@ -340,7 +340,8 @@ where
 		// proceed with transactions
 		// We calculate soft deadline used only in case we start skipping transactions.
 		let now = (self.now)();
-		let soft_deadline = now + deadline.saturating_duration_since(now) / 2;
+		// TMP : Until the soft deadline is configurable we need to change it here.
+		let soft_deadline = now + deadline.saturating_duration_since(now);
 		let block_timer = time::Instant::now();
 		let mut skipped = 0;
 		let mut unqueue_invalid = Vec::new();
