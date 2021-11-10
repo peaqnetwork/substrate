@@ -116,13 +116,14 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
-use codec::{Codec, Encode};
+use codec::{Codec, Decode, Encode};
 use frame_support::{
 	dispatch::PostDispatchInfo,
 	traits::{
 		EnsureInherentsAreFirst, ExecuteBlock, OffchainWorker, OnFinalize, OnIdle, OnInitialize,
 		OnRuntimeUpgrade,
 	},
+	unsigned::TransactionValidityError,
 	weights::{DispatchClass, DispatchInfo, GetDispatchInfo},
 };
 use frame_system::DigestOf;
@@ -140,6 +141,15 @@ use sp_std::{marker::PhantomData, prelude::*};
 pub type CheckedOf<E, C> = <E as Checkable<C>>::Checked;
 pub type CallOf<E, C> = <CheckedOf<E, C> as Applyable>::Call;
 pub type OriginOf<E, C> = <CallOf<E, C> as Dispatchable>::Origin;
+
+/*#[cfg(feature = "para-check")]
+pub type PreCheckedOf<E, C> = <E as PreCheckable<C>>::PreChecked;
+#[cfg(feature = "para-check")]
+pub type CheckedOfPre<E, C> = <E as PreCheckable<C>>::Checked;
+#[cfg(feature = "para-check")]
+pub type CallOfPre<E, C> = <CheckedOfPre<E, C> as Applyable>::Call;
+#[cfg(feature = "para-check")]
+pub type OriginOfPre<E, C> = <CallOfPre<E, C> as Dispatchable>::Origin;*/
 
 /// Main entry point for certain runtime actions as e.g. `execute_block`.
 ///
@@ -185,6 +195,167 @@ where
 			AllPallets,
 			COnRuntimeUpgrade,
 		>::execute_block(block);
+	}
+}
+
+#[cfg(feature = "para-check")]
+impl<
+		System: frame_system::Config + EnsureInherentsAreFirst<Block>,
+		Block: traits::Block<Header = System::Header, Hash = System::Hash>,
+		Context: Default,
+		UnsignedValidator,
+		AllPallets: OnRuntimeUpgrade
+			+ OnInitialize<System::BlockNumber>
+			+ OnIdle<System::BlockNumber>
+			+ OnFinalize<System::BlockNumber>
+			+ OffchainWorker<System::BlockNumber>,
+		COnRuntimeUpgrade: OnRuntimeUpgrade,
+	> Executive<System, Block, Context, UnsignedValidator, AllPallets, COnRuntimeUpgrade>
+where
+	Block::Extrinsic: Checkable<Context> + Codec,
+	CheckedOf<Block::Extrinsic, Context>: Applyable + Codec + GetDispatchInfo,
+	CallOf<Block::Extrinsic, Context>:
+		Dispatchable<Info = DispatchInfo, PostInfo = PostDispatchInfo>,
+	OriginOf<Block::Extrinsic, Context>: From<Option<System::AccountId>>,
+	UnsignedValidator: ValidateUnsigned<Call = CallOf<Block::Extrinsic, Context>>,
+{
+	/// Actually execute all transitions for `block`.
+	/// n is the number of different tasks spawned for signatures verification
+	pub fn execute_block_with_para_check(block: Block, n: usize) {
+		sp_io::init_tracing();
+		sp_tracing::within_span! {
+			sp_tracing::info_span!("execute_block", ?block);
+
+			Executive::<
+				System,
+				Block,
+				Context,
+				UnsignedValidator,
+				AllPallets,
+				COnRuntimeUpgrade,
+			>::initialize_block(block.header());
+
+			// any initial checks
+			Self::initial_checks(&block);
+
+			let (header, extrinsics) = block.deconstruct();
+			let encoded_extrinsics = extrinsics.iter().map(|e| e.encode()).collect();
+
+			// Verify signatures
+			let checked_extrinsics = match Self::check_parallel(extrinsics, n) {
+				Ok(checked_extrinsics) => checked_extrinsics,
+				Err(e) => {
+					let err: &'static str = e.into();
+					panic!("{}", err)
+				}
+			};
+
+			// execute extrinsics
+			Self::execute_checked_extrinsics_with_book_keeping(encoded_extrinsics, checked_extrinsics, *header.number());
+
+			// any final checks
+			Self::final_checks(&header);
+		}
+	}
+
+	fn check_parallel(
+		extrinsics: Vec<Block::Extrinsic>,
+		n: usize,
+	) -> Result<Vec<CheckedOf<Block::Extrinsic, Context>>, TransactionValidityError> {
+		fn spawn_verify<
+			Context: Default,
+			Extrinsic: Checkable<Context, Checked = CheckedExtrinsic> + Codec,
+			CheckedExtrinsic: Encode,
+		>(
+			data: Vec<u8>,
+		) -> Vec<u8> {
+			let stream = &mut &data[..];
+			let extrinsics = Vec::<Extrinsic>::decode(stream).expect("Failed to decode");
+
+			let mut checked_extrinsics = Vec::with_capacity(extrinsics.len());
+			for extrinsic in extrinsics {
+				match extrinsic.check(&Default::default()) {
+					Ok(checked_extrinsic) => checked_extrinsics.push(checked_extrinsic),
+					Err(e) =>
+						return Result::<Vec<CheckedExtrinsic>, TransactionValidityError>::Err(e)
+							.encode(),
+				}
+			}
+			Result::<Vec<CheckedExtrinsic>, TransactionValidityError>::Ok(checked_extrinsics)
+				.encode()
+		}
+
+		let chunk_size = extrinsics.len() / n;
+		let handles: Vec<sp_tasks::DataJoinHandle> = extrinsics
+			.chunks(chunk_size)
+			.map(|chunk| {
+				let mut async_payload = Vec::new();
+				chunk.encode_to(&mut async_payload);
+				sp_tasks::spawn(
+					spawn_verify::<Context, Block::Extrinsic, CheckedOf<Block::Extrinsic, Context>>,
+					async_payload,
+				)
+			})
+			.collect();
+
+		let mut all_checked_extrinsics = Vec::with_capacity(extrinsics.len());
+		for handle in handles {
+			let checked_extrinsics = <Result<
+				Vec<CheckedOf<Block::Extrinsic, Context>>,
+				TransactionValidityError,
+			> as Decode>::decode(&mut &handle.join()[..])
+			.expect("Failed to decode result")?;
+			all_checked_extrinsics.extend(checked_extrinsics);
+		}
+
+		Ok(all_checked_extrinsics)
+	}
+
+	/// Execute given extrinsics and take care of post-extrinsics book-keeping.
+	fn execute_checked_extrinsics_with_book_keeping(
+		encoded_extrinsics: Vec<Vec<u8>>,
+		extrinsics: Vec<CheckedOf<Block::Extrinsic, Context>>,
+		block_number: NumberFor<Block>,
+	) {
+		extrinsics.into_iter().zip(encoded_extrinsics).for_each(
+			|(extrinsic, encoded_extrinsic)| {
+				if let Err(e) = Self::apply_checked_extrinsic(extrinsic, encoded_extrinsic) {
+					let err: &'static str = e.into();
+					panic!("{}", err)
+				}
+			},
+		);
+
+		// post-extrinsics book-keeping
+		<frame_system::Pallet<System>>::note_finished_extrinsics();
+
+		Self::idle_and_finalize_hook(block_number);
+	}
+
+	/// Actually apply a checked extrinsic given its `encoded_len`; this doesn't note its hash.
+	fn apply_checked_extrinsic(
+		xt: CheckedOf<Block::Extrinsic, Context>,
+		to_note: Vec<u8>,
+	) -> ApplyExtrinsicResult {
+		sp_io::init_tracing();
+		let encoded_len = to_note.len();
+		sp_tracing::enter_span!(sp_tracing::info_span!("apply_checked_extrinsic",
+					ext=?sp_core::hexdisplay::HexDisplay::from(&to_note)));
+
+		// We don't need to make sure to `note_extrinsic` only after we know it's going to be
+		// executed to prevent it from leaking in storage since at this point, it will either
+		// execute or panic (and revert storage changes).
+		<frame_system::Pallet<System>>::note_extrinsic(to_note);
+
+		// AUDIT: Under no circumstances may this function panic from here onwards.
+
+		// Decode parameters and dispatch
+		let dispatch_info = xt.get_dispatch_info();
+		let r = Applyable::apply::<UnsignedValidator>(xt, &dispatch_info, encoded_len)?;
+
+		<frame_system::Pallet<System>>::note_applied_extrinsic(&r, dispatch_info);
+
+		Ok(r.map(|_| ()).map_err(|e| e.error))
 	}
 }
 

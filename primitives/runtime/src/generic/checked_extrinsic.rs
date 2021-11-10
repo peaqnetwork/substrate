@@ -25,11 +25,12 @@ use crate::{
 	},
 	transaction_validity::{TransactionSource, TransactionValidity},
 };
+use codec::{Decode, Encode};
 
 /// Definition of something that the external world might want to say; its
 /// existence implies that it has been checked and is good, particularly with
 /// regards to the signature.
-#[derive(PartialEq, Eq, Clone, sp_core::RuntimeDebug)]
+#[derive(PartialEq, Eq, Clone, Encode, Decode, sp_core::RuntimeDebug)]
 pub struct CheckedExtrinsic<AccountId, Call, Extra> {
 	/// Who this purports to be from and the number of extrinsics have come before
 	/// from the same signer, if anyone (note this is not a signature).
