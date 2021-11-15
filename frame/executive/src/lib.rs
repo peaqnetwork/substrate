@@ -338,7 +338,8 @@ where
 		}
 	}
 
-	fn initial_checks(block: &Block) {
+	///
+	pub fn initial_checks(block: &Block) {
 		sp_tracing::enter_span!(sp_tracing::Level::TRACE, "initial_checks");
 		let header = block.header();
 
@@ -413,7 +414,8 @@ where
 		<frame_system::Pallet<System>>::finalize()
 	}
 
-	fn idle_and_finalize_hook(block_number: NumberFor<Block>) {
+	///
+	pub fn idle_and_finalize_hook(block_number: NumberFor<Block>) {
 		let weight = <frame_system::Pallet<System>>::block_weight();
 		let max_weight = <System::BlockWeights as frame_support::traits::Get<_>>::get().max_block;
 		let mut remaining_weight = max_weight.saturating_sub(weight.total());
@@ -480,7 +482,8 @@ where
 		Ok(r.map(|_| ()).map_err(|e| e.error))
 	}
 
-	fn final_checks(header: &System::Header) {
+	///
+	pub fn final_checks(header: &System::Header) {
 		sp_tracing::enter_span!(sp_tracing::Level::TRACE, "final_checks");
 		// remove temporaries
 		let new_header = <frame_system::Pallet<System>>::finalize();
