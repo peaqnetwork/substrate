@@ -16,7 +16,9 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-#[derive(derive_more::Display, derive_more::From)]
+use jsonrpsee::types::error::CallError;
+
+#[derive(derive_more::Display, derive_more::From, Debug)]
 /// Top-level error type for the RPC handler
 pub enum Error {
 	/// The GRANDPA RPC endpoint is not ready.
@@ -56,15 +58,11 @@ impl From<Error> for ErrorCode {
 	}
 }
 
-impl From<Error> for jsonrpc_core::Error {
+impl From<Error> for CallError {
 	fn from(error: Error) -> Self {
-		let message = format!("{}", error);
+		let message = error.to_string();
 		let code = ErrorCode::from(error);
-		jsonrpc_core::Error {
-			message,
-			code: jsonrpc_core::ErrorCode::ServerError(code as i64),
-			data: None,
-		}
+		Self::Custom { code: code as i32, message, data: None }
 	}
 }
 
@@ -73,3 +71,5 @@ impl From<std::num::TryFromIntError> for Error {
 		Error::VoterStateReportsUnreasonablyLargeNumbers
 	}
 }
+
+impl std::error::Error for Error {}

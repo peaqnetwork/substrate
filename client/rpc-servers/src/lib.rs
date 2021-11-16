@@ -20,13 +20,11 @@
 
 #![warn(missing_docs)]
 
-mod middleware;
-
-use jsonrpc_core::{IoHandlerExtension, MetaIoHandler};
-use log::error;
-use prometheus_endpoint::{register, Counter, PrometheusError, Registry, U64};
-use pubsub::PubSubMetadata;
-use std::io;
+use jsonrpsee::{
+	http_server::{AccessControlBuilder, HttpServerBuilder, HttpServerHandle},
+	ws_server::{WsServerBuilder, WsServerHandle},
+	RpcModule,
+};
 
 const MEGABYTE: usize = 1024 * 1024;
 
@@ -39,41 +37,7 @@ pub const WS_MAX_BUFFER_CAPACITY_DEFAULT: usize = 16 * MEGABYTE;
 /// Default maximum number of connections for WS RPC servers.
 const WS_MAX_CONNECTIONS: usize = 100;
 
-/// The RPC IoHandler containing all requested APIs.
-pub type RpcHandler<T> = pubsub::PubSubHandler<T, RpcMiddleware>;
-
-pub use middleware::{method_names, RpcMetrics, RpcMiddleware};
-
-/// Construct rpc `IoHandler`
-pub fn rpc_handler<M: PubSubMetadata>(
-	extension: impl IoHandlerExtension<M>,
-	rpc_middleware: RpcMiddleware,
-) -> RpcHandler<M> {
-	let io_handler = MetaIoHandler::with_middleware(rpc_middleware);
-	let mut io = pubsub::PubSubHandler::new(io_handler);
-	extension.augment(&mut io);
-
-	// add an endpoint to list all available methods.
-	let mut methods = io.iter().map(|x| x.0.clone()).collect::<Vec<String>>();
-	io.add_method("rpc_methods", {
-		methods.sort();
-		let methods = serde_json::to_value(&methods)
-			.expect("Serialization of Vec<String> is infallible; qed");
-
-		move |_| {
-			let methods = methods.clone();
-			async move {
-				Ok(serde_json::json!({
-					"version": 1,
-					"methods": methods,
-				}))
-			}
-		}
-	});
-	io
-}
-
-/// RPC server-specific prometheus metrics.
+/*/// RPC server-specific prometheus metrics.
 #[derive(Debug, Clone, Default)]
 pub struct ServerMetrics {
 	/// Number of sessions opened.
@@ -108,125 +72,117 @@ impl ServerMetrics {
 			})
 			.unwrap_or_else(|| Ok(Default::default()))
 	}
-}
+}*/
 
-/// Type alias for ipc server
-pub type IpcServer = ipc::Server;
 /// Type alias for http server
-pub type HttpServer = http::Server;
+pub type HttpServer = HttpServerHandle;
 /// Type alias for ws server
-pub type WsServer = ws::Server;
+pub type WsServer = WsServerHandle;
 
-impl ws::SessionStats for ServerMetrics {
-	fn open_session(&self, _id: ws::SessionId) {
-		self.session_opened.as_ref().map(|m| m.inc());
-	}
+// TODO: (dp) port this stuff
+// impl ws::SessionStats for ServerMetrics {
+// 	fn open_session(&self, _id: ws::SessionId) {
+// 		self.session_opened.as_ref().map(|m| m.inc());
+// 	}
 
-	fn close_session(&self, _id: ws::SessionId) {
-		self.session_closed.as_ref().map(|m| m.inc());
-	}
-}
+// 	fn close_session(&self, _id: ws::SessionId) {
+// 		self.session_closed.as_ref().map(|m| m.inc());
+// 	}
+// }
 
 /// Start HTTP server listening on given address.
-pub fn start_http<M: pubsub::PubSubMetadata + Default + Unpin>(
-	addr: &std::net::SocketAddr,
+pub fn start_http<M: Send + Sync + 'static>(
+	addr: std::net::SocketAddr,
 	cors: Option<&Vec<String>>,
-	io: RpcHandler<M>,
 	maybe_max_payload_mb: Option<usize>,
-	tokio_handle: tokio::runtime::Handle,
-) -> io::Result<http::Server> {
+	module: RpcModule<M>,
+	rt: tokio::runtime::Handle,
+) -> Result<HttpServerHandle, anyhow::Error> {
 	let max_request_body_size = maybe_max_payload_mb
 		.map(|mb| mb.saturating_mul(MEGABYTE))
 		.unwrap_or(RPC_MAX_PAYLOAD_DEFAULT);
 
-	http::ServerBuilder::new(io)
-		.threads(1)
-		.event_loop_executor(tokio_handle)
-		.health_api(("/health", "system_health"))
-		.allowed_hosts(hosts_filtering(cors.is_some()))
-		.rest_api(if cors.is_some() { http::RestApi::Secure } else { http::RestApi::Unsecure })
-		.cors(map_cors::<http::AccessControlAllowOrigin>(cors))
-		.max_request_body_size(max_request_body_size)
-		.start_http(addr)
-}
+	let mut acl = AccessControlBuilder::new();
 
-/// Start IPC server listening on given path.
-pub fn start_ipc<M: pubsub::PubSubMetadata + Default>(
-	addr: &str,
-	io: RpcHandler<M>,
-	server_metrics: ServerMetrics,
-) -> io::Result<ipc::Server> {
-	let builder = ipc::ServerBuilder::new(io);
-	#[cfg(target_os = "unix")]
-	builder.set_security_attributes({
-		let security_attributes = ipc::SecurityAttributes::empty();
-		security_attributes.set_mode(0o600)?;
-		security_attributes
-	});
-	builder.session_stats(server_metrics).start(addr)
+	log::info!("Starting JSONRPC HTTP server: addr={}, allowed origins={:?}", addr, cors);
+
+	if let Some(cors) = cors {
+		// Whitelist listening address.
+		acl = acl.set_allowed_hosts([
+			format!("localhost:{}", addr.port()),
+			format!("127.0.0.1:{}", addr.port()),
+		])?;
+
+		let origins: Vec<String> = cors.iter().map(Into::into).collect();
+		acl = acl.set_allowed_origins(origins)?;
+	};
+
+	let server = HttpServerBuilder::default()
+		.max_request_body_size(max_request_body_size as u32)
+		.set_access_control(acl.build())
+		.custom_tokio_runtime(rt)
+		.build(addr)?;
+
+	let rpc_api = build_rpc_api(module);
+	let handle = server.start(rpc_api)?;
+
+	Ok(handle)
 }
 
 /// Start WS server listening on given address.
-pub fn start_ws<
-	M: pubsub::PubSubMetadata + From<futures::channel::mpsc::UnboundedSender<String>>,
->(
-	addr: &std::net::SocketAddr,
+pub fn start_ws<M: Send + Sync + 'static>(
+	addr: std::net::SocketAddr,
 	max_connections: Option<usize>,
 	cors: Option<&Vec<String>>,
-	io: RpcHandler<M>,
 	maybe_max_payload_mb: Option<usize>,
-	maybe_max_out_buffer_capacity_mb: Option<usize>,
-	server_metrics: ServerMetrics,
-	tokio_handle: tokio::runtime::Handle,
-) -> io::Result<ws::Server> {
-	let max_payload = maybe_max_payload_mb
+	module: RpcModule<M>,
+	rt: tokio::runtime::Handle,
+) -> Result<WsServerHandle, anyhow::Error> {
+	let max_request_body_size = maybe_max_payload_mb
 		.map(|mb| mb.saturating_mul(MEGABYTE))
 		.unwrap_or(RPC_MAX_PAYLOAD_DEFAULT);
-	let max_out_buffer_capacity = maybe_max_out_buffer_capacity_mb
-		.map(|mb| mb.saturating_mul(MEGABYTE))
-		.unwrap_or(WS_MAX_BUFFER_CAPACITY_DEFAULT);
+	let max_connections = max_connections.unwrap_or(WS_MAX_CONNECTIONS);
 
-	if max_payload > max_out_buffer_capacity {
-		log::warn!(
-			"maximum payload ({}) is more than maximum output buffer ({}) size in ws server, the payload will actually be limited by the buffer size",
-			max_payload,
-			max_out_buffer_capacity,
-		)
+	let mut builder = WsServerBuilder::default()
+		.max_request_body_size(max_request_body_size as u32)
+		.max_connections(max_connections as u64)
+		.custom_tokio_runtime(rt.clone());
+
+	log::info!("Starting JSONRPC WS server: addr={}, allowed origins={:?}", addr, cors);
+
+	if let Some(cors) = cors {
+		// Whitelist listening address.
+		builder = builder.set_allowed_hosts([
+			format!("localhost:{}", addr.port()),
+			format!("127.0.0.1:{}", addr.port()),
+		])?;
+
+		// Set allowed origins.
+		builder = builder.set_allowed_origins(cors)?;
 	}
 
-	ws::ServerBuilder::with_meta_extractor(io, |context: &ws::RequestContext| {
-		context.sender().into()
-	})
-	.event_loop_executor(tokio_handle)
-	.max_payload(max_payload)
-	.max_connections(max_connections.unwrap_or(WS_MAX_CONNECTIONS))
-	.max_out_buffer_capacity(max_out_buffer_capacity)
-	.allowed_origins(map_cors(cors))
-	.allowed_hosts(hosts_filtering(cors.is_some()))
-	.session_stats(server_metrics)
-	.start(addr)
-	.map_err(|err| match err {
-		ws::Error::Io(io) => io,
-		ws::Error::ConnectionClosed => io::ErrorKind::BrokenPipe.into(),
-		e => {
-			error!("{}", e);
-			io::ErrorKind::Other.into()
-		},
-	})
+	let server = tokio::task::block_in_place(|| rt.block_on(builder.build(addr)))?;
+
+	let rpc_api = build_rpc_api(module);
+	let handle = server.start(rpc_api)?;
+
+	Ok(handle)
 }
 
-fn map_cors<T: for<'a> From<&'a str>>(cors: Option<&Vec<String>>) -> http::DomainsValidation<T> {
-	cors.map(|x| x.iter().map(AsRef::as_ref).map(Into::into).collect::<Vec<_>>())
-		.into()
-}
+fn build_rpc_api<M: Send + Sync + 'static>(mut rpc_api: RpcModule<M>) -> RpcModule<M> {
+	let mut available_methods = rpc_api.method_names().collect::<Vec<_>>();
+	// NOTE(niklasad1): substrate master doesn't have this.
+	available_methods.push("rpc_methods");
+	available_methods.sort_unstable();
 
-fn hosts_filtering(enable: bool) -> http::DomainsValidation<http::Host> {
-	if enable {
-		// NOTE The listening address is whitelisted by default.
-		// Setting an empty vector here enables the validation
-		// and allows only the listening address.
-		http::DomainsValidation::AllowOnly(vec![])
-	} else {
-		http::DomainsValidation::Disabled
-	}
+	rpc_api
+		.register_method("rpc_methods", move |_, _| {
+			Ok(serde_json::json!({
+				"version": 1,
+				"methods": available_methods,
+			}))
+		})
+		.expect("infallible all other methods have their own address space; qed");
+
+	rpc_api
 }

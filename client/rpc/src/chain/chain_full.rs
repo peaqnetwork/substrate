@@ -18,34 +18,36 @@
 
 //! Blockchain API backend for full nodes.
 
-use super::{client_err, error::FutureResult, ChainBackend};
-use futures::FutureExt;
-use jsonrpc_pubsub::manager::SubscriptionManager;
+use super::{client_err, ChainBackend, Error};
+use crate::{chain::helpers, SubscriptionTaskExecutor};
+use std::{marker::PhantomData, sync::Arc};
+
+use jsonrpsee::ws_server::SubscriptionSink;
 use sc_client_api::{BlockBackend, BlockchainEvents};
 use sp_blockchain::HeaderBackend;
 use sp_runtime::{
 	generic::{BlockId, SignedBlock},
 	traits::Block as BlockT,
 };
-use std::{marker::PhantomData, sync::Arc};
 
 /// Blockchain API backend for full nodes. Reads all the data from local database.
 pub struct FullChain<Block: BlockT, Client> {
 	/// Substrate client.
 	client: Arc<Client>,
-	/// Current subscriptions.
-	subscriptions: SubscriptionManager,
 	/// phantom member to pin the block type
 	_phantom: PhantomData<Block>,
+	/// Subscription executor.
+	executor: SubscriptionTaskExecutor,
 }
 
 impl<Block: BlockT, Client> FullChain<Block, Client> {
 	/// Create new Chain API RPC handler.
-	pub fn new(client: Arc<Client>, subscriptions: SubscriptionManager) -> Self {
-		Self { client, subscriptions, _phantom: PhantomData }
+	pub fn new(client: Arc<Client>, executor: SubscriptionTaskExecutor) -> Self {
+		Self { client, executor, _phantom: PhantomData }
 	}
 }
 
+#[async_trait::async_trait]
 impl<Block, Client> ChainBackend<Client, Block> for FullChain<Block, Client>
 where
 	Block: BlockT + 'static,
@@ -56,17 +58,39 @@ where
 		&self.client
 	}
 
-	fn subscriptions(&self) -> &SubscriptionManager {
-		&self.subscriptions
+	async fn header(&self, hash: Option<Block::Hash>) -> Result<Option<Block::Header>, Error> {
+		self.client.header(BlockId::Hash(self.unwrap_or_best(hash))).map_err(client_err)
 	}
 
-	fn header(&self, hash: Option<Block::Hash>) -> FutureResult<Option<Block::Header>> {
-		let res = self.client.header(BlockId::Hash(self.unwrap_or_best(hash))).map_err(client_err);
-		async move { res }.boxed()
+	async fn block(&self, hash: Option<Block::Hash>) -> Result<Option<SignedBlock<Block>>, Error> {
+		self.client.block(&BlockId::Hash(self.unwrap_or_best(hash))).map_err(client_err)
 	}
 
-	fn block(&self, hash: Option<Block::Hash>) -> FutureResult<Option<SignedBlock<Block>>> {
-		let res = self.client.block(&BlockId::Hash(self.unwrap_or_best(hash))).map_err(client_err);
-		async move { res }.boxed()
+	fn subscribe_all_heads(&self, sink: SubscriptionSink) -> Result<(), Error> {
+		let client = self.client.clone();
+		let executor = self.executor.clone();
+
+		let fut = helpers::subscribe_headers(client, sink, "chain_subscribeAllHeads");
+		executor.execute(Box::pin(fut));
+		Ok(())
+	}
+
+	fn subscribe_new_heads(&self, sink: SubscriptionSink) -> Result<(), Error> {
+		let client = self.client.clone();
+		let executor = self.executor.clone();
+
+		let fut = helpers::subscribe_headers(client, sink, "chain_subscribeNewHeads");
+		executor.execute(Box::pin(fut));
+		Ok(())
+	}
+
+	fn subscribe_finalized_heads(&self, sink: SubscriptionSink) -> Result<(), Error> {
+		let client = self.client.clone();
+		let executor = self.executor.clone();
+
+		let fut =
+			helpers::subscribe_finalized_headers(client, sink, "chain_subscribeFinalizedHeads");
+		executor.execute(Box::pin(fut));
+		Ok(())
 	}
 }

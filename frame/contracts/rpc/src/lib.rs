@@ -17,27 +17,37 @@
 
 //! Node-specific RPC methods for interaction with contracts.
 
-use std::sync::Arc;
+#![warn(unused_crate_dependencies)]
 
+use std::{marker::PhantomData, sync::Arc};
+
+use anyhow::anyhow;
 use codec::Codec;
-use jsonrpc_core::{Error, ErrorCode, Result};
-use jsonrpc_derive::rpc;
+use jsonrpsee::{
+	proc_macros::rpc,
+	types::{
+		async_trait,
+		error::{CallError, Error as JsonRpseeError},
+		RpcResult,
+	},
+};
 use pallet_contracts_primitives::{Code, ContractExecResult, ContractInstantiateResult};
 use serde::{Deserialize, Serialize};
+use serde_json::value::to_raw_value;
 use sp_api::ProvideRuntimeApi;
 use sp_blockchain::HeaderBackend;
 use sp_core::{Bytes, H256};
 use sp_rpc::number::NumberOrHex;
 use sp_runtime::{
 	generic::BlockId,
-	traits::{Block as BlockT, Header as HeaderT},
+	traits::{self, Block as BlockT, Header as HeaderT},
 };
 use std::convert::{TryFrom, TryInto};
 
 pub use pallet_contracts_rpc_runtime_api::ContractsApi as ContractsRuntimeApi;
 
-const RUNTIME_ERROR: i64 = 1;
-const CONTRACT_DOESNT_EXIST: i64 = 2;
+const RUNTIME_ERROR: i32 = 1;
+const CONTRACT_DOESNT_EXIST: i32 = 2;
 
 pub type Weight = u64;
 
@@ -57,15 +67,17 @@ const GAS_LIMIT: Weight = 5 * GAS_PER_SECOND;
 
 /// A private newtype for converting `ContractAccessError` into an RPC error.
 struct ContractAccessError(pallet_contracts_primitives::ContractAccessError);
-impl From<ContractAccessError> for Error {
-	fn from(e: ContractAccessError) -> Error {
+
+impl From<ContractAccessError> for JsonRpseeError {
+	fn from(e: ContractAccessError) -> Self {
 		use pallet_contracts_primitives::ContractAccessError::*;
 		match e.0 {
-			DoesntExist => Error {
-				code: ErrorCode::ServerError(CONTRACT_DOESNT_EXIST),
+			DoesntExist => CallError::Custom {
+				code: CONTRACT_DOESNT_EXIST,
 				message: "The specified contract doesn't exist.".into(),
 				data: None,
-			},
+			}
+			.into(),
 		}
 	}
 }
@@ -96,7 +108,7 @@ pub struct InstantiateRequest<AccountId, Hash> {
 }
 
 /// Contracts RPC methods.
-#[rpc]
+#[rpc(client, server, namespace = "contracts")]
 pub trait ContractsApi<BlockHash, BlockNumber, AccountId, Balance, Hash> {
 	/// Executes a call to a contract.
 	///
@@ -104,12 +116,12 @@ pub trait ContractsApi<BlockHash, BlockNumber, AccountId, Balance, Hash> {
 	/// won't change any state. Nonetheless, the calling state-changing contracts is still possible.
 	///
 	/// This method is useful for calling getter-like methods on contracts.
-	#[rpc(name = "contracts_call")]
+	#[method(name = "call")]
 	fn call(
 		&self,
 		call_request: CallRequest<AccountId>,
 		at: Option<BlockHash>,
-	) -> Result<ContractExecResult>;
+	) -> RpcResult<ContractExecResult>;
 
 	/// Instantiate a new contract.
 	///
@@ -117,67 +129,67 @@ pub trait ContractsApi<BlockHash, BlockNumber, AccountId, Balance, Hash> {
 	/// is not actually created.
 	///
 	/// This method is useful for UIs to dry-run contract instantiations.
-	#[rpc(name = "contracts_instantiate")]
+	#[method(name = "instantiate")]
 	fn instantiate(
 		&self,
 		instantiate_request: InstantiateRequest<AccountId, Hash>,
 		at: Option<BlockHash>,
-	) -> Result<ContractInstantiateResult<AccountId>>;
+	) -> RpcResult<ContractInstantiateResult<AccountId>>;
 
 	/// Returns the value under a specified storage `key` in a contract given by `address` param,
 	/// or `None` if it is not set.
-	#[rpc(name = "contracts_getStorage")]
+	#[method(name = "getStorage")]
 	fn get_storage(
 		&self,
 		address: AccountId,
 		key: H256,
 		at: Option<BlockHash>,
-	) -> Result<Option<Bytes>>;
+	) -> RpcResult<Option<Bytes>>;
 }
 
-/// An implementation of contract specific RPC methods.
-pub struct Contracts<C, B> {
-	client: Arc<C>,
-	_marker: std::marker::PhantomData<B>,
+/// Contracts RPC methods.
+pub struct ContractsRpc<Client, Block> {
+	client: Arc<Client>,
+	_marker: PhantomData<Block>,
 }
 
-impl<C, B> Contracts<C, B> {
+impl<Client, Block> ContractsRpc<Client, Block> {
 	/// Create new `Contracts` with the given reference to the client.
-	pub fn new(client: Arc<C>) -> Self {
-		Contracts { client, _marker: Default::default() }
+	pub fn new(client: Arc<Client>) -> Self {
+		Self { client, _marker: Default::default() }
 	}
 }
-impl<C, Block, AccountId, Balance, Hash>
-	ContractsApi<
+
+#[async_trait]
+impl<Client, Block, AccountId, Balance, Hash>
+	ContractsApiServer<
 		<Block as BlockT>::Hash,
 		<<Block as BlockT>::Header as HeaderT>::Number,
 		AccountId,
 		Balance,
 		Hash,
-	> for Contracts<C, Block>
+	> for ContractsRpc<Client, Block>
 where
 	Block: BlockT,
-	C: Send + Sync + 'static + ProvideRuntimeApi<Block> + HeaderBackend<Block>,
-	C::Api: ContractsRuntimeApi<
+	Client: Send + Sync + 'static + ProvideRuntimeApi<Block> + HeaderBackend<Block>,
+	Client::Api: ContractsRuntimeApi<
 		Block,
 		AccountId,
 		Balance,
 		<<Block as BlockT>::Header as HeaderT>::Number,
 		Hash,
 	>,
-	AccountId: Codec,
-	Balance: Codec + TryFrom<NumberOrHex>,
-	Hash: Codec,
+	AccountId: traits::MaybeSerializeDeserialize + Codec + Send + Sync + 'static,
+	Balance: Codec + TryFrom<NumberOrHex> + Send + Sync + 'static,
+	Hash: traits::MaybeSerializeDeserialize + Codec + Send + Sync + 'static,
 {
 	fn call(
 		&self,
 		call_request: CallRequest<AccountId>,
 		at: Option<<Block as BlockT>::Hash>,
-	) -> Result<ContractExecResult> {
+	) -> RpcResult<ContractExecResult> {
 		let api = self.client.runtime_api();
-		let at = BlockId::hash(at.unwrap_or_else(||
-			// If the block hash is not supplied assume the best block.
-			self.client.info().best_hash));
+		let at = BlockId::hash(at.unwrap_or_else(|| self.client.info().best_hash));
 
 		let CallRequest { origin, dest, value, gas_limit, input_data } = call_request;
 
@@ -196,12 +208,9 @@ where
 		&self,
 		instantiate_request: InstantiateRequest<AccountId, Hash>,
 		at: Option<<Block as BlockT>::Hash>,
-	) -> Result<ContractInstantiateResult<AccountId>> {
+	) -> RpcResult<ContractInstantiateResult<AccountId>> {
 		let api = self.client.runtime_api();
-		let at = BlockId::hash(at.unwrap_or_else(||
-			// If the block hash is not supplied assume the best block.
-			self.client.info().best_hash));
-
+		let at = BlockId::hash(at.unwrap_or_else(|| self.client.info().best_hash));
 		let InstantiateRequest { origin, endowment, gas_limit, code, data, salt } =
 			instantiate_request;
 
@@ -221,12 +230,9 @@ where
 		address: AccountId,
 		key: H256,
 		at: Option<<Block as BlockT>::Hash>,
-	) -> Result<Option<Bytes>> {
+	) -> RpcResult<Option<Bytes>> {
 		let api = self.client.runtime_api();
-		let at = BlockId::hash(at.unwrap_or_else(||
-			// If the block hash is not supplied assume the best block.
-			self.client.info().best_hash));
-
+		let at = BlockId::hash(at.unwrap_or_else(|| self.client.info().best_hash));
 		let result = api
 			.get_storage(&at, address, key.into())
 			.map_err(runtime_error_into_rpc_err)?
@@ -238,32 +244,31 @@ where
 }
 
 /// Converts a runtime trap into an RPC error.
-fn runtime_error_into_rpc_err(err: impl std::fmt::Debug) -> Error {
-	Error {
-		code: ErrorCode::ServerError(RUNTIME_ERROR),
+fn runtime_error_into_rpc_err(err: impl std::fmt::Debug) -> JsonRpseeError {
+	CallError::Custom {
+		code: RUNTIME_ERROR,
 		message: "Runtime error".into(),
-		data: Some(format!("{:?}", err).into()),
+		data: to_raw_value(&format!("{:?}", err)).ok(),
 	}
+	.into()
 }
 
-fn decode_hex<H: std::fmt::Debug + Copy, T: TryFrom<H>>(from: H, name: &str) -> Result<T> {
-	from.try_into().map_err(|_| Error {
-		code: ErrorCode::InvalidParams,
-		message: format!("{:?} does not fit into the {} type", from, name),
-		data: None,
-	})
+fn decode_hex<H: std::fmt::Debug + Copy, T: TryFrom<H>>(
+	from: H,
+	name: &str,
+) -> Result<T, JsonRpseeError> {
+	from.try_into()
+		.map_err(|_| anyhow!("{:?} does not fit into the {} type", from, name).into())
 }
 
-fn limit_gas(gas_limit: Weight) -> Result<()> {
+fn limit_gas(gas_limit: Weight) -> Result<(), JsonRpseeError> {
 	if gas_limit > GAS_LIMIT {
-		Err(Error {
-			code: ErrorCode::InvalidParams,
-			message: format!(
-				"Requested gas limit is greater than maximum allowed: {} > {}",
-				gas_limit, GAS_LIMIT
-			),
-			data: None,
-		})
+		Err(anyhow!(
+			"Requested gas limit is greater than maximum allowed: {} > {}",
+			gas_limit,
+			GAS_LIMIT
+		)
+		.into())
 	} else {
 		Ok(())
 	}
@@ -272,6 +277,7 @@ fn limit_gas(gas_limit: Weight) -> Result<()> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use pallet_contracts_primitives::{ContractExecResult, ContractInstantiateResult};
 	use sp_core::U256;
 
 	fn trim(json: &str) -> String {

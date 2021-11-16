@@ -34,11 +34,13 @@ mod client;
 mod metrics;
 mod task_manager;
 
-use std::{collections::HashMap, io, net::SocketAddr, pin::Pin, task::Poll};
+use std::{collections::HashMap, net::SocketAddr, pin::Pin, task::Poll};
 
 use codec::{Decode, Encode};
-use futures::{stream, Future, FutureExt, Stream, StreamExt};
+use futures::{stream, FutureExt, Stream, StreamExt};
+use jsonrpsee::RpcModule;
 use log::{debug, error, warn};
+use sc_client_api::{blockchain::HeaderBackend, BlockchainEvents};
 use sc_network::PeerId;
 use sc_utils::mpsc::TracingUnboundedReceiver;
 use sp_runtime::{
@@ -50,9 +52,9 @@ pub use self::{
 	builder::{
 		build_network, build_offchain_workers, new_client, new_db_backend, new_full_client,
 		new_full_parts, new_light_parts, spawn_tasks, BuildNetworkParams, KeystoreContainer,
-		NetworkStarter, NoopRpcExtensionBuilder, RpcExtensionBuilder, SpawnTasksParams,
-		TFullBackend, TFullCallExecutor, TFullClient, TLightBackend, TLightBackendWithHash,
-		TLightCallExecutor, TLightClient, TLightClientWithBackend,
+		NetworkStarter, SpawnTasksParams, TFullBackend, TFullCallExecutor, TFullClient,
+		TLightBackend, TLightBackendWithHash, TLightCallExecutor, TLightClient,
+		TLightClientWithBackend,
 	},
 	client::{ClientConfig, LocalCallExecutor},
 	error::Error,
@@ -65,12 +67,11 @@ pub use sc_chain_spec::{
 	ChainSpec, ChainType, Extension as ChainSpecExtension, GenericChainSpec, NoExtension,
 	Properties, RuntimeGenesis,
 };
-use sc_client_api::{blockchain::HeaderBackend, BlockchainEvents};
+
 pub use sc_consensus::ImportQueue;
 pub use sc_executor::NativeExecutionDispatch;
 #[doc(hidden)]
 pub use sc_network::config::{OnDemand, TransactionImport, TransactionImportFuture};
-pub use sc_rpc::Metadata as RpcMetadata;
 pub use sc_tracing::TracingReceiver;
 pub use sc_transaction_pool::Options as TransactionPoolOptions;
 pub use sc_transaction_pool_api::{error::IntoPoolError, InPoolTransaction, TransactionPool};
@@ -79,38 +80,6 @@ pub use std::{ops::Deref, result::Result, sync::Arc};
 pub use task_manager::{SpawnTaskHandle, TaskManager};
 
 const DEFAULT_PROTOCOL_ID: &str = "sup";
-
-/// RPC handlers that can perform RPC queries.
-#[derive(Clone)]
-pub struct RpcHandlers(
-	Arc<jsonrpc_core::MetaIoHandler<sc_rpc::Metadata, sc_rpc_server::RpcMiddleware>>,
-);
-
-impl RpcHandlers {
-	/// Starts an RPC query.
-	///
-	/// The query is passed as a string and must be a JSON text similar to what an HTTP client
-	/// would for example send.
-	///
-	/// Returns a `Future` that contains the optional response.
-	///
-	/// If the request subscribes you to events, the `Sender` in the `RpcSession` object is used to
-	/// send back spontaneous events.
-	pub fn rpc_query(
-		&self,
-		mem: &RpcSession,
-		request: &str,
-	) -> Pin<Box<dyn Future<Output = Option<String>> + Send>> {
-		self.0.handle_request(request, mem.metadata.clone()).boxed()
-	}
-
-	/// Provides access to the underlying `MetaIoHandler`
-	pub fn io_handler(
-		&self,
-	) -> Arc<jsonrpc_core::MetaIoHandler<sc_rpc::Metadata, sc_rpc_server::RpcMiddleware>> {
-		self.0.clone()
-	}
-}
 
 /// An incomplete set of chain components, but enough to run the chain ops subcommands.
 pub struct PartialComponents<Client, Backend, SelectChain, ImportQueue, TransactionPool, Other> {
@@ -296,149 +265,80 @@ async fn build_network_future<
 // Wrapper for HTTP and WS servers that makes sure they are properly shut down.
 mod waiting {
 	pub struct HttpServer(pub Option<sc_rpc_server::HttpServer>);
+
 	impl Drop for HttpServer {
 		fn drop(&mut self) {
 			if let Some(server) = self.0.take() {
-				server.close_handle().close();
-				server.wait();
-			}
-		}
-	}
-
-	pub struct IpcServer(pub Option<sc_rpc_server::IpcServer>);
-	impl Drop for IpcServer {
-		fn drop(&mut self) {
-			if let Some(server) = self.0.take() {
-				server.close_handle().close();
-				let _ = server.wait();
+				let _ = server.stop().map(|stop| futures::executor::block_on(stop));
 			}
 		}
 	}
 
 	pub struct WsServer(pub Option<sc_rpc_server::WsServer>);
+
 	impl Drop for WsServer {
 		fn drop(&mut self) {
 			if let Some(server) = self.0.take() {
-				server.close_handle().close();
-				let _ = server.wait();
+				let _ = server.stop().map(|stop| futures::executor::block_on(stop));
 			}
 		}
 	}
 }
 
-/// Starts RPC servers that run in their own thread, and returns an opaque object that keeps them
-/// alive.
-fn start_rpc_servers<
-	H: FnMut(
-		sc_rpc::DenyUnsafe,
-		sc_rpc_server::RpcMiddleware,
-	) -> Result<sc_rpc_server::RpcHandler<sc_rpc::Metadata>, Error>,
->(
+/// Starts RPC servers.
+fn start_rpc_servers<R>(
 	config: &Configuration,
-	mut gen_handler: H,
-	rpc_metrics: Option<sc_rpc_server::RpcMetrics>,
-	server_metrics: sc_rpc_server::ServerMetrics,
-) -> Result<Box<dyn std::any::Any + Send>, Error> {
-	fn maybe_start_server<T, F>(
-		address: Option<SocketAddr>,
-		mut start: F,
-	) -> Result<Option<T>, Error>
-	where
-		F: FnMut(&SocketAddr) -> Result<T, Error>,
-	{
-		address
-			.map(|mut address| {
-				start(&address).or_else(|e| match e {
-					Error::Io(e) => match e.kind() {
-						io::ErrorKind::AddrInUse | io::ErrorKind::PermissionDenied => {
-							warn!("Unable to bind RPC server to {}. Trying random port.", address);
-							address.set_port(0);
-							start(&address)
-						},
-						_ => Err(e.into()),
-					},
-					e => Err(e),
-				})
-			})
-			.transpose()
-	}
+	gen_rpc_module: R,
+) -> Result<Box<dyn std::any::Any + Send + Sync>, error::Error>
+where
+	R: FnOnce(sc_rpc::DenyUnsafe) -> Result<RpcModule<()>, Error>,
+{
 
-	fn deny_unsafe(addr: &SocketAddr, methods: &RpcMethods) -> sc_rpc::DenyUnsafe {
-		let is_exposed_addr = !addr.ip().is_loopback();
+	fn deny_unsafe(addrs: &[SocketAddr], methods: &RpcMethods) -> sc_rpc::DenyUnsafe {
+		let is_exposed_addr = addrs.iter().any(|addr| !addr.ip().is_loopback());
 		match (is_exposed_addr, methods) {
 			| (_, RpcMethods::Unsafe) | (false, RpcMethods::Auto) => sc_rpc::DenyUnsafe::No,
 			_ => sc_rpc::DenyUnsafe::Yes,
 		}
 	}
 
-	let rpc_method_names = sc_rpc_server::method_names(|m| gen_handler(sc_rpc::DenyUnsafe::No, m))?;
-	Ok(Box::new((
-		config
-			.rpc_ipc
-			.as_ref()
-			.map(|path| {
-				sc_rpc_server::start_ipc(
-					&*path,
-					gen_handler(
-						sc_rpc::DenyUnsafe::No,
-						sc_rpc_server::RpcMiddleware::new(
-							rpc_metrics.clone(),
-							rpc_method_names.clone(),
-							"ipc",
-						),
-					)?,
-					server_metrics.clone(),
-				)
-				.map_err(Error::from)
-			})
-			.transpose()?,
-		maybe_start_server(config.rpc_http, |address| {
-			sc_rpc_server::start_http(
-				address,
-				config.rpc_cors.as_ref(),
-				gen_handler(
-					deny_unsafe(&address, &config.rpc_methods),
-					sc_rpc_server::RpcMiddleware::new(
-						rpc_metrics.clone(),
-						rpc_method_names.clone(),
-						"http",
-					),
-				)?,
-				config.rpc_max_payload,
-				config.tokio_handle.clone(),
-			)
-			.map_err(Error::from)
-		})?
-		.map(|s| waiting::HttpServer(Some(s))),
-		maybe_start_server(config.rpc_ws, |address| {
-			sc_rpc_server::start_ws(
-				address,
-				config.rpc_ws_max_connections,
-				config.rpc_cors.as_ref(),
-				gen_handler(
-					deny_unsafe(&address, &config.rpc_methods),
-					sc_rpc_server::RpcMiddleware::new(
-						rpc_metrics.clone(),
-						rpc_method_names.clone(),
-						"ws",
-					),
-				)?,
-				config.rpc_max_payload,
-				config.ws_max_out_buffer_capacity,
-				server_metrics.clone(),
-				config.tokio_handle.clone(),
-			)
-			.map_err(Error::from)
-		})?
-		.map(|s| waiting::WsServer(Some(s))),
-	)))
+	let ws_addr = config.rpc_ws.unwrap_or_else(|| "127.0.0.1:9944".parse().unwrap());
+	let http_addr = config.rpc_http.unwrap_or_else(|| "127.0.0.1:9933".parse().unwrap());
+
+	// TODO(niklasad1): this force the same policy even if the one of the addresses is
+	// local only.
+	//
+	// Ideally we should have to different builders but annoying refactoring to do...
+	let module = gen_rpc_module(deny_unsafe(&[ws_addr, http_addr], &config.rpc_methods))?;
+
+	let http = sc_rpc_server::start_http(
+		http_addr,
+		config.rpc_cors.as_ref(),
+		config.rpc_max_payload,
+		module.clone(),
+		config.tokio_handle.clone(),
+	)
+	.map_err(|e| Error::Application(e.into()))?;
+
+	let ws = sc_rpc_server::start_ws(
+		ws_addr,
+		config.rpc_ws_max_connections,
+		config.rpc_cors.as_ref(),
+		config.rpc_max_payload,
+		module,
+		config.tokio_handle.clone(),
+	)
+	.map_err(|e| Error::Application(e.into()))?;
+
+	Ok(Box::new((http, ws)))
 }
 
+// TODO: (dp) Not sure this makes sense to us, I put it back mostly to make the code compile.
 /// An RPC session. Used to perform in-memory RPC queries (ie. RPC queries that don't go through
 /// the HTTP or WebSockets server).
 #[derive(Clone)]
 pub struct RpcSession {
-	metadata: sc_rpc::Metadata,
+	metadata: futures::channel::mpsc::UnboundedSender<String>,
 }
 
 impl RpcSession {
@@ -449,7 +349,7 @@ impl RpcSession {
 	///
 	/// The `RpcSession` must be kept alive in order to receive messages on the sender.
 	pub fn new(sender: futures::channel::mpsc::UnboundedSender<String>) -> RpcSession {
-		RpcSession { metadata: sender.into() }
+		RpcSession { metadata: sender }
 	}
 }
 

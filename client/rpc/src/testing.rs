@@ -22,6 +22,12 @@ use futures::{
 	executor,
 	task::{FutureObj, Spawn, SpawnError},
 };
+use jsonrpsee::types::{
+	v2::{Response as RpcResponse, RpcError},
+	DeserializeOwned,
+};
+use sp_core::traits::SpawnNamed;
+use std::future::Future;
 
 // Executor shared by all tests.
 //
@@ -33,6 +39,7 @@ lazy_static::lazy_static! {
 }
 
 /// Executor for use in testing
+#[derive(Clone, Copy)]
 pub struct TaskExecutor;
 impl Spawn for TaskExecutor {
 	fn spawn_obj(&self, future: FutureObj<'static, ()>) -> Result<(), SpawnError> {
@@ -43,4 +50,27 @@ impl Spawn for TaskExecutor {
 	fn status(&self) -> Result<(), SpawnError> {
 		Ok(())
 	}
+}
+impl SpawnNamed for TaskExecutor {
+	fn spawn_blocking(&self, _name: &'static str, future: futures::future::BoxFuture<'static, ()>) {
+		EXECUTOR.spawn_ok(future);
+	}
+
+	fn spawn(&self, _name: &'static str, future: futures::future::BoxFuture<'static, ()>) {
+		EXECUTOR.spawn_ok(future);
+	}
+}
+
+/// Wrap a future in a timeout a little more concisely
+pub(crate) fn timeout_secs<I, F: Future<Output = I>>(s: u64, f: F) -> tokio::time::Timeout<F> {
+	tokio::time::timeout(tokio::time::Duration::from_secs(s), f)
+}
+
+pub(crate) fn deser_call<T: DeserializeOwned>(raw: String) -> T {
+	let out: RpcResponse<T> = serde_json::from_str(&raw).unwrap();
+	out.result
+}
+
+pub(crate) fn deser_error<'a>(raw: &'a str) -> RpcError<'a> {
+	serde_json::from_str(&raw).unwrap()
 }

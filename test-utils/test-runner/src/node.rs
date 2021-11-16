@@ -23,7 +23,6 @@ use futures::{
 	channel::{mpsc, oneshot},
 	FutureExt, SinkExt,
 };
-use jsonrpc_core::MetaIoHandler;
 use manual_seal::EngineCommand;
 use sc_client_api::{
 	backend::{self, Backend},
@@ -47,8 +46,6 @@ use sp_state_machine::Ext;
 /// the node process is dropped when this struct is dropped
 /// also holds logs from the process.
 pub struct Node<T: ChainInfo> {
-	/// rpc handler for communicating with the node over rpc.
-	rpc_handler: Arc<MetaIoHandler<sc_rpc::Metadata, sc_rpc_server::RpcMiddleware>>,
 	/// handle to the running node.
 	task_manager: Option<TaskManager>,
 	/// client instance
@@ -85,7 +82,6 @@ where
 {
 	/// Creates a new node.
 	pub fn new(
-		rpc_handler: Arc<MetaIoHandler<sc_rpc::Metadata, sc_rpc_server::RpcMiddleware>>,
 		task_manager: TaskManager,
 		client: Arc<
 			TFullClient<T::Block, T::RuntimeApi, NativeElseWasmExecutor<T::ExecutorDispatch>>,
@@ -105,7 +101,6 @@ where
 		backend: Arc<TFullBackend<T::Block>>,
 	) -> Self {
 		Self {
-			rpc_handler,
 			task_manager: Some(task_manager),
 			client: client.clone(),
 			pool,
@@ -122,10 +117,10 @@ where
 	/// 		let response = node.rpc_handler()
 	/// 		.handle_request_sync(request, Default::default());
 	/// ```
-	pub fn rpc_handler(
-		&self,
-	) -> Arc<MetaIoHandler<sc_rpc::Metadata, sc_rpc_server::RpcMiddleware>> {
-		self.rpc_handler.clone()
+	// pub fn rpc_handler(&self) -> Arc<MetaIoHandler<sc_rpc::Metadata,
+	// sc_rpc_server::RpcMiddleware>> {
+	pub fn rpc_handler(&self) {
+		todo!("not ported to jsonrpsee yet");
 	}
 
 	/// Return a reference to the Client

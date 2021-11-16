@@ -17,9 +17,8 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 use super::*;
-use crate::testing::TaskExecutor;
+use crate::testing::{deser_call, timeout_secs, TaskExecutor};
 use assert_matches::assert_matches;
-use futures::executor;
 use sc_block_builder::BlockBuilderProvider;
 use sp_consensus::BlockOrigin;
 use sp_rpc::list::ListOrValue;
@@ -28,65 +27,99 @@ use substrate_test_runtime_client::{
 	runtime::{Block, Header, H256},
 };
 
-#[test]
-fn should_return_header() {
+#[tokio::test]
+async fn should_return_header() {
 	let client = Arc::new(substrate_test_runtime_client::new());
-	let api = new_full(client.clone(), SubscriptionManager::new(Arc::new(TaskExecutor)));
+	let api = new_full(client.clone(), SubscriptionTaskExecutor::new(TaskExecutor)).into_rpc();
 
-	assert_matches!(
-		executor::block_on(api.header(Some(client.genesis_hash()).into())),
-		Ok(Some(ref x)) if x == &Header {
+	let res: Header = deser_call(
+		api.call_with("chain_getHeader", [H256::from(client.genesis_hash())])
+			.await
+			.unwrap(),
+	);
+	assert_eq!(
+		res,
+		Header {
 			parent_hash: H256::from_low_u64_be(0),
 			number: 0,
-			state_root: x.state_root.clone(),
-			extrinsics_root:
-				"03170a2e7597b7b7e3d84c05391d139a62b157e78786d8c082f29dcf4c111314".parse().unwrap(),
+			state_root: res.state_root.clone(),
+			extrinsics_root: "03170a2e7597b7b7e3d84c05391d139a62b157e78786d8c082f29dcf4c111314"
+				.parse()
+				.unwrap(),
+			digest: Default::default(),
+		}
+	);
+
+	let res: Header = deser_call(api.call("chain_getHeader", None).await.unwrap());
+	assert_eq!(
+		res,
+		Header {
+			parent_hash: H256::from_low_u64_be(0),
+			number: 0,
+			state_root: res.state_root.clone(),
+			extrinsics_root: "03170a2e7597b7b7e3d84c05391d139a62b157e78786d8c082f29dcf4c111314"
+				.parse()
+				.unwrap(),
 			digest: Default::default(),
 		}
 	);
 
 	assert_matches!(
-		executor::block_on(api.header(None.into())),
-		Ok(Some(ref x)) if x == &Header {
-			parent_hash: H256::from_low_u64_be(0),
-			number: 0,
-			state_root: x.state_root.clone(),
-			extrinsics_root:
-				"03170a2e7597b7b7e3d84c05391d139a62b157e78786d8c082f29dcf4c111314".parse().unwrap(),
-			digest: Default::default(),
-		}
-	);
-
-	assert_matches!(
-		executor::block_on(api.header(Some(H256::from_low_u64_be(5)).into())),
-		Ok(None)
+		deser_call::<Option<Header>>(
+			api.call_with("chain_getHeader", [H256::from_low_u64_be(5)]).await.unwrap()
+		),
+		None
 	);
 }
 
-#[test]
-fn should_return_a_block() {
+#[tokio::test]
+async fn should_return_a_block() {
 	let mut client = Arc::new(substrate_test_runtime_client::new());
-	let api = new_full(client.clone(), SubscriptionManager::new(Arc::new(TaskExecutor)));
+	let api = new_full(client.clone(), SubscriptionTaskExecutor::new(TaskExecutor)).into_rpc();
 
 	let block = client.new_block(Default::default()).unwrap().build().unwrap().block;
 	let block_hash = block.hash();
-	executor::block_on(client.import(BlockOrigin::Own, block)).unwrap();
+	client.import(BlockOrigin::Own, block).await.unwrap();
+
+	let res: SignedBlock<Block> = deser_call(
+		api.call_with("chain_getBlock", [H256::from(client.genesis_hash())])
+			.await
+			.unwrap(),
+	);
 
 	// Genesis block is not justified
-	assert_matches!(
-		executor::block_on(api.block(Some(client.genesis_hash()).into())),
-		Ok(Some(SignedBlock { justifications: None, .. }))
-	);
+	assert!(res.justifications.is_none());
 
-	assert_matches!(
-		executor::block_on(api.block(Some(block_hash).into())),
-		Ok(Some(ref x)) if x.block == Block {
+	let res: SignedBlock<Block> =
+		deser_call(api.call_with("chain_getBlock", [H256::from(block_hash)]).await.unwrap());
+	assert_eq!(
+		res.block,
+		Block {
 			header: Header {
 				parent_hash: client.genesis_hash(),
 				number: 1,
-				state_root: x.block.header.state_root.clone(),
-				extrinsics_root:
-					"03170a2e7597b7b7e3d84c05391d139a62b157e78786d8c082f29dcf4c111314".parse().unwrap(),
+				state_root: res.block.header.state_root.clone(),
+				extrinsics_root: "03170a2e7597b7b7e3d84c05391d139a62b157e78786d8c082f29dcf4c111314"
+					.parse()
+					.unwrap(),
+				digest: Default::default(),
+			},
+			extrinsics: vec![],
+		}
+	);
+
+	let res: SignedBlock<Block> =
+		deser_call(api.call_with("chain_getBlock", Vec::<H256>::new()).await.unwrap());
+	assert_eq!(
+		res.block,
+		Block {
+			header: Header {
+				parent_hash: client.genesis_hash(),
+				number: 1,
+				state_root: res.block.header.state_root.clone(),
+				extrinsics_root: "03170a2e7597b7b7e3d84c05391d139a62b157e78786d8c082f29dcf4c111314"
+					.parse()
+					.unwrap(),
 				digest: Default::default(),
 			},
 			extrinsics: vec![],
@@ -94,155 +127,162 @@ fn should_return_a_block() {
 	);
 
 	assert_matches!(
-		executor::block_on(api.block(None.into())),
-		Ok(Some(ref x)) if x.block == Block {
-			header: Header {
-				parent_hash: client.genesis_hash(),
-				number: 1,
-				state_root: x.block.header.state_root.clone(),
-				extrinsics_root:
-					"03170a2e7597b7b7e3d84c05391d139a62b157e78786d8c082f29dcf4c111314".parse().unwrap(),
-				digest: Default::default(),
-			},
-			extrinsics: vec![],
-		}
+		deser_call::<Option<Header>>(
+			api.call_with("chain_getBlock", [H256::from_low_u64_be(5)]).await.unwrap()
+		),
+		None
 	);
-
-	assert_matches!(executor::block_on(api.block(Some(H256::from_low_u64_be(5)).into())), Ok(None));
 }
 
-#[test]
-fn should_return_block_hash() {
+#[tokio::test]
+async fn should_return_block_hash() {
 	let mut client = Arc::new(substrate_test_runtime_client::new());
-	let api = new_full(client.clone(), SubscriptionManager::new(Arc::new(TaskExecutor)));
+	let api = new_full(client.clone(), SubscriptionTaskExecutor::new(TaskExecutor)).into_rpc();
 
-	assert_matches!(
-		api.block_hash(None.into()),
-		Ok(ListOrValue::Value(Some(ref x))) if x == &client.genesis_hash()
+	let res: ListOrValue<Option<H256>> = deser_call(
+		api.call_with::<Vec<ListOrValue<NumberOrHex>>>("chain_getBlockHash", vec![])
+			.await
+			.unwrap(),
 	);
 
 	assert_matches!(
-		api.block_hash(Some(ListOrValue::Value(0u64.into())).into()),
-		Ok(ListOrValue::Value(Some(ref x))) if x == &client.genesis_hash()
+		res,
+		ListOrValue::Value(Some(ref x)) if x == &client.genesis_hash()
 	);
 
+	let res: ListOrValue<Option<H256>> =
+		deser_call(api.call_with("chain_getBlockHash", [ListOrValue::from(0_u64)]).await.unwrap());
 	assert_matches!(
-		api.block_hash(Some(ListOrValue::Value(1u64.into())).into()),
-		Ok(ListOrValue::Value(None))
+		res,
+		ListOrValue::Value(Some(ref x)) if x == &client.genesis_hash()
 	);
+
+	let res: Option<ListOrValue<Option<H256>>> =
+		deser_call(api.call_with("chain_getBlockHash", [ListOrValue::from(1_u64)]).await.unwrap());
+	assert_matches!(res, None);
 
 	let block = client.new_block(Default::default()).unwrap().build().unwrap().block;
-	executor::block_on(client.import(BlockOrigin::Own, block.clone())).unwrap();
+	client.import(BlockOrigin::Own, block.clone()).await.unwrap();
 
+	let res: ListOrValue<Option<H256>> =
+		deser_call(api.call_with("chain_getBlockHash", [ListOrValue::from(0_u64)]).await.unwrap());
 	assert_matches!(
-		api.block_hash(Some(ListOrValue::Value(0u64.into())).into()),
-		Ok(ListOrValue::Value(Some(ref x))) if x == &client.genesis_hash()
-	);
-	assert_matches!(
-		api.block_hash(Some(ListOrValue::Value(1u64.into())).into()),
-		Ok(ListOrValue::Value(Some(ref x))) if x == &block.hash()
-	);
-	assert_matches!(
-		api.block_hash(Some(ListOrValue::Value(sp_core::U256::from(1u64).into())).into()),
-		Ok(ListOrValue::Value(Some(ref x))) if x == &block.hash()
+		res,
+		ListOrValue::Value(Some(ref x)) if x == &client.genesis_hash()
 	);
 
+	let res: ListOrValue<Option<H256>> =
+		deser_call(api.call_with("chain_getBlockHash", [ListOrValue::from(1_u64)]).await.unwrap());
 	assert_matches!(
-		api.block_hash(Some(vec![0u64.into(), 1u64.into(), 2u64.into()].into())),
-		Ok(ListOrValue::List(list)) if list == &[client.genesis_hash().into(), block.hash().into(), None]
+		res,
+		ListOrValue::Value(Some(ref x)) if x == &block.hash()
+	);
+
+	let res: ListOrValue<Option<H256>> = deser_call(
+		api.call_with("chain_getBlockHash", [ListOrValue::Value(sp_core::U256::from(1_u64))])
+			.await
+			.unwrap(),
+	);
+	assert_matches!(
+		res,
+		ListOrValue::Value(Some(ref x)) if x == &block.hash()
+	);
+
+	let res: ListOrValue<Option<H256>> = deser_call(
+		api.call_with("chain_getBlockHash", [ListOrValue::List(vec![0_u64, 1_u64, 2_u64])])
+			.await
+			.unwrap(),
+	);
+	assert_matches!(
+		res,
+		ListOrValue::List(list) if list == &[client.genesis_hash().into(), block.hash().into(), None]
 	);
 }
 
-#[test]
-fn should_return_finalized_hash() {
+#[tokio::test]
+async fn should_return_finalized_hash() {
 	let mut client = Arc::new(substrate_test_runtime_client::new());
-	let api = new_full(client.clone(), SubscriptionManager::new(Arc::new(TaskExecutor)));
+	let api = new_full(client.clone(), SubscriptionTaskExecutor::new(TaskExecutor)).into_rpc();
 
-	assert_matches!(
-		api.finalized_head(),
-		Ok(ref x) if x == &client.genesis_hash()
-	);
+	let res: H256 =
+		deser_call(api.call_with("chain_getFinalizedHead", Vec::<()>::new()).await.unwrap());
+	assert_eq!(res, client.genesis_hash());
 
 	// import new block
 	let block = client.new_block(Default::default()).unwrap().build().unwrap().block;
-	executor::block_on(client.import(BlockOrigin::Own, block)).unwrap();
+	client.import(BlockOrigin::Own, block).await.unwrap();
+
 	// no finalization yet
-	assert_matches!(
-		api.finalized_head(),
-		Ok(ref x) if x == &client.genesis_hash()
-	);
+	let res: H256 =
+		deser_call(api.call_with("chain_getFinalizedHead", Vec::<()>::new()).await.unwrap());
+	assert_eq!(res, client.genesis_hash());
 
 	// finalize
 	client.finalize_block(BlockId::number(1), None).unwrap();
-	assert_matches!(
-		api.finalized_head(),
-		Ok(ref x) if x == &client.block_hash(1).unwrap().unwrap()
-	);
+	let res: H256 =
+		deser_call(api.call_with("chain_getFinalizedHead", Vec::<()>::new()).await.unwrap());
+	assert_eq!(res, client.block_hash(1).unwrap().unwrap());
 }
 
-#[test]
-fn should_notify_about_latest_block() {
-	let (subscriber, id, mut transport) = Subscriber::new_test("test");
-
-	{
+#[tokio::test]
+async fn should_notify_about_latest_block() {
+	let mut sub = {
 		let mut client = Arc::new(substrate_test_runtime_client::new());
-		let api = new_full(client.clone(), SubscriptionManager::new(Arc::new(TaskExecutor)));
+		let api = new_full(client.clone(), SubscriptionTaskExecutor::new(TaskExecutor)).into_rpc();
 
-		api.subscribe_all_heads(Default::default(), subscriber);
-
-		// assert id assigned
-		assert!(matches!(executor::block_on(id), Ok(Ok(SubscriptionId::String(_)))));
+		let sub = api.test_subscription("chain_subscribeAllHeads", Vec::<()>::new()).await;
 
 		let block = client.new_block(Default::default()).unwrap().build().unwrap().block;
-		executor::block_on(client.import(BlockOrigin::Own, block)).unwrap();
-	}
+		client.import(BlockOrigin::Own, block).await.unwrap();
+		sub
+	};
+
+	assert_matches!(timeout_secs(1, sub.next::<Header>()).await, Ok(_));
+	assert_matches!(timeout_secs(1, sub.next::<Header>()).await, Ok(_));
+
+	// TODO(niklasad1): assert that the subscription was closed.
+	assert_matches!(timeout_secs(1, sub.next::<Header>()).await, Err(_));
+}
+
+#[tokio::test]
+async fn should_notify_about_best_block() {
+	let mut sub = {
+		let mut client = Arc::new(substrate_test_runtime_client::new());
+		let api = new_full(client.clone(), SubscriptionTaskExecutor::new(TaskExecutor)).into_rpc();
+
+		let sub = api.test_subscription("chain_subscribeNewHeads", Vec::<()>::new()).await;
+
+		let block = client.new_block(Default::default()).unwrap().build().unwrap().block;
+		client.import(BlockOrigin::Own, block).await.unwrap();
+		sub
+	};
 
 	// Check for the correct number of notifications
-	executor::block_on((&mut transport).take(2).collect::<Vec<_>>());
-	assert!(executor::block_on(transport.next()).is_none());
+	assert_matches!(timeout_secs(1, sub.next::<Header>()).await, Ok(_));
+	assert_matches!(timeout_secs(1, sub.next::<Header>()).await, Ok(_));
+
+	// TODO(niklasad1): assert that the subscription was closed.
+	assert_matches!(timeout_secs(1, sub.next::<Header>()).await, Err(_));
 }
 
-#[test]
-fn should_notify_about_best_block() {
-	let (subscriber, id, mut transport) = Subscriber::new_test("test");
-
-	{
+#[tokio::test]
+async fn should_notify_about_finalized_block() {
+	let mut sub = {
 		let mut client = Arc::new(substrate_test_runtime_client::new());
-		let api = new_full(client.clone(), SubscriptionManager::new(Arc::new(TaskExecutor)));
+		let api = new_full(client.clone(), SubscriptionTaskExecutor::new(TaskExecutor)).into_rpc();
 
-		api.subscribe_new_heads(Default::default(), subscriber);
-
-		// assert id assigned
-		assert!(matches!(executor::block_on(id), Ok(Ok(SubscriptionId::String(_)))));
+		let sub = api.test_subscription("chain_subscribeFinalizedHeads", Vec::<()>::new()).await;
 
 		let block = client.new_block(Default::default()).unwrap().build().unwrap().block;
-		executor::block_on(client.import(BlockOrigin::Own, block)).unwrap();
-	}
-
-	// Assert that the correct number of notifications have been sent.
-	executor::block_on((&mut transport).take(2).collect::<Vec<_>>());
-	assert!(executor::block_on(transport.next()).is_none());
-}
-
-#[test]
-fn should_notify_about_finalized_block() {
-	let (subscriber, id, mut transport) = Subscriber::new_test("test");
-
-	{
-		let mut client = Arc::new(substrate_test_runtime_client::new());
-		let api = new_full(client.clone(), SubscriptionManager::new(Arc::new(TaskExecutor)));
-
-		api.subscribe_finalized_heads(Default::default(), subscriber);
-
-		// assert id assigned
-		assert!(matches!(executor::block_on(id), Ok(Ok(SubscriptionId::String(_)))));
-
-		let block = client.new_block(Default::default()).unwrap().build().unwrap().block;
-		executor::block_on(client.import(BlockOrigin::Own, block)).unwrap();
+		client.import(BlockOrigin::Own, block).await.unwrap();
 		client.finalize_block(BlockId::number(1), None).unwrap();
-	}
+		sub
+	};
 
-	// Assert that the correct number of notifications have been sent.
-	executor::block_on((&mut transport).take(2).collect::<Vec<_>>());
-	assert!(executor::block_on(transport.next()).is_none());
+	// Check for the correct number of notifications
+	assert_matches!(timeout_secs(1, sub.next::<Header>()).await, Ok(_));
+	assert_matches!(timeout_secs(1, sub.next::<Header>()).await, Ok(_));
+
+	// TODO(niklasad1): assert that the subscription was closed.
+	assert_matches!(timeout_secs(1, sub.next::<Header>()).await, Err(_));
 }

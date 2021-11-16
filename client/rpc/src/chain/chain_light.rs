@@ -18,45 +18,47 @@
 
 //! Blockchain API backend for light nodes.
 
-use futures::{future::ready, FutureExt, TryFutureExt};
-use jsonrpc_pubsub::manager::SubscriptionManager;
+use super::{client_err, ChainBackend, Error};
+use crate::{chain::helpers, SubscriptionTaskExecutor};
 use std::sync::Arc;
 
-use sc_client_api::light::{Fetcher, RemoteBlockchain, RemoteBodyRequest};
+use jsonrpsee::ws_server::SubscriptionSink;
+use sc_client_api::{
+	light::{Fetcher, RemoteBlockchain, RemoteBodyRequest},
+	BlockchainEvents,
+};
+use sp_blockchain::HeaderBackend;
 use sp_runtime::{
 	generic::{BlockId, SignedBlock},
 	traits::Block as BlockT,
 };
-
-use super::{client_err, error::FutureResult, ChainBackend};
-use sc_client_api::BlockchainEvents;
-use sp_blockchain::HeaderBackend;
 
 /// Blockchain API backend for light nodes. Reads all the data from local
 /// database, if available, or fetches it from remote node otherwise.
 pub struct LightChain<Block: BlockT, Client, F> {
 	/// Substrate client.
 	client: Arc<Client>,
-	/// Current subscriptions.
-	subscriptions: SubscriptionManager,
 	/// Remote blockchain reference
 	remote_blockchain: Arc<dyn RemoteBlockchain<Block>>,
 	/// Remote fetcher reference.
 	fetcher: Arc<F>,
+	/// Subscription executor.
+	executor: SubscriptionTaskExecutor,
 }
 
 impl<Block: BlockT, Client, F: Fetcher<Block>> LightChain<Block, Client, F> {
 	/// Create new Chain API RPC handler.
 	pub fn new(
 		client: Arc<Client>,
-		subscriptions: SubscriptionManager,
 		remote_blockchain: Arc<dyn RemoteBlockchain<Block>>,
 		fetcher: Arc<F>,
+		executor: SubscriptionTaskExecutor,
 	) -> Self {
-		Self { client, subscriptions, remote_blockchain, fetcher }
+		Self { client, executor, remote_blockchain, fetcher }
 	}
 }
 
+#[async_trait::async_trait]
 impl<Block, Client, F> ChainBackend<Client, Block> for LightChain<Block, Client, F>
 where
 	Block: BlockT + 'static,
@@ -68,11 +70,7 @@ where
 		&self.client
 	}
 
-	fn subscriptions(&self) -> &SubscriptionManager {
-		&self.subscriptions
-	}
-
-	fn header(&self, hash: Option<Block::Hash>) -> FutureResult<Option<Block::Header>> {
+	async fn header(&self, hash: Option<Block::Hash>) -> Result<Option<Block::Header>, Error> {
 		let hash = self.unwrap_or_best(hash);
 
 		let fetcher = self.fetcher.clone();
@@ -82,33 +80,50 @@ where
 			BlockId::Hash(hash),
 		);
 
-		maybe_header.then(move |result| ready(result.map_err(client_err))).boxed()
+		maybe_header.await.map_err(client_err)
 	}
 
-	fn block(&self, hash: Option<Block::Hash>) -> FutureResult<Option<SignedBlock<Block>>> {
+	async fn block(&self, hash: Option<Block::Hash>) -> Result<Option<SignedBlock<Block>>, Error> {
 		let fetcher = self.fetcher.clone();
-		self.header(hash)
-			.and_then(move |header| async move {
-				match header {
-					Some(header) => {
-						let body = fetcher
-							.remote_body(RemoteBodyRequest {
-								header: header.clone(),
-								retry_count: Default::default(),
-							})
-							.await;
+		let header = self.header(hash).await?;
 
-						body.map(|body| {
-							Some(SignedBlock {
-								block: Block::new(header, body),
-								justifications: None,
-							})
-						})
-						.map_err(client_err)
-					},
-					None => Ok(None),
-				}
-			})
-			.boxed()
+		match header {
+			Some(header) => {
+				let req_body =
+					RemoteBodyRequest { header: header.clone(), retry_count: Default::default() };
+				let body = fetcher.remote_body(req_body).await.map_err(client_err)?;
+
+				Ok(Some(SignedBlock { block: Block::new(header, body), justifications: None }))
+			},
+			None => Ok(None),
+		}
+	}
+
+	fn subscribe_all_heads(&self, sink: SubscriptionSink) -> Result<(), Error> {
+		let client = self.client.clone();
+		let executor = self.executor.clone();
+
+		let fut = helpers::subscribe_headers(client, sink, "chain_subscribeAllHead");
+		executor.execute(Box::pin(fut));
+		Ok(())
+	}
+
+	fn subscribe_new_heads(&self, sink: SubscriptionSink) -> Result<(), Error> {
+		let client = self.client.clone();
+		let executor = self.executor.clone();
+
+		let fut = helpers::subscribe_headers(client, sink, "chain_subscribeNewHeads");
+		executor.execute(Box::pin(fut));
+		Ok(())
+	}
+
+	fn subscribe_finalized_heads(&self, sink: SubscriptionSink) -> Result<(), Error> {
+		let client = self.client.clone();
+		let executor = self.executor.clone();
+
+		let fut =
+			helpers::subscribe_finalized_headers(client, sink, "chain_subscribeFinalizedHeads");
+		executor.execute(Box::pin(fut));
+		Ok(())
 	}
 }

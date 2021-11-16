@@ -18,11 +18,11 @@
 //! Client parts
 use crate::{default_config, ChainInfo};
 use futures::channel::mpsc;
-use jsonrpc_core::MetaIoHandler;
+use jsonrpsee::RpcModule;
 use manual_seal::{
 	consensus::babe::{BabeConsensusDataProvider, SlotTimestampProvider},
 	import_queue,
-	rpc::{ManualSeal, ManualSealApi},
+	rpc::{ManualSeal, ManualSealApiServer},
 	run_manual_seal, EngineCommand, ManualSealParams,
 };
 use sc_client_api::backend::Backend;
@@ -45,7 +45,6 @@ use sp_transaction_pool::runtime_api::TaggedTransactionQueue;
 use std::{str::FromStr, sync::Arc};
 
 type ClientParts<T> = (
-	Arc<MetaIoHandler<sc_rpc::Metadata, sc_rpc_server::RpcMiddleware>>,
 	TaskManager,
 	Arc<
 		TFullClient<
@@ -185,10 +184,16 @@ where
 
 	// Channel for the rpc handler to communicate with the authorship task.
 	let (command_sink, commands_stream) = mpsc::channel(10);
-
 	let rpc_sink = command_sink.clone();
 
-	let rpc_handlers = {
+	let rpc_builder = Box::new(move |_, _| {
+		let seal = ManualSeal::new(rpc_sink).into_rpc();
+		let mut module = RpcModule::new(());
+		module.merge(seal).expect("only one module; qed");
+		Ok(module)
+	});
+
+	let _rpc_handlers = {
 		let params = SpawnTasksParams {
 			config,
 			client: client.clone(),
@@ -197,11 +202,7 @@ where
 			keystore: keystore.sync_keystore(),
 			on_demand: None,
 			transaction_pool: transaction_pool.clone(),
-			rpc_extensions_builder: Box::new(move |_, _| {
-				let mut io = jsonrpc_core::IoHandler::default();
-				io.extend_with(ManualSealApi::to_delegate(ManualSeal::new(rpc_sink.clone())));
-				Ok(io)
-			}),
+			rpc_builder,
 			remote_blockchain: None,
 			network,
 			system_rpc_tx,
@@ -238,7 +239,6 @@ where
 	task_manager.spawn_essential_handle().spawn("manual-seal", authorship_future);
 
 	network_starter.start_network();
-	let rpc_handler = rpc_handlers.io_handler();
 
-	Ok((rpc_handler, task_manager, client, transaction_pool, command_sink, backend))
+	Ok((task_manager, client, transaction_pool, command_sink, backend))
 }

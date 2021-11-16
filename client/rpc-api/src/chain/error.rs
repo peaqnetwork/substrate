@@ -18,38 +18,31 @@
 
 //! Error helpers for Chain RPC module.
 
-use crate::errors;
-use jsonrpc_core as rpc;
+use jsonrpsee::types::error::{CallError, Error as JsonRpseeError};
 
 /// Chain RPC Result type.
 pub type Result<T> = std::result::Result<T, Error>;
-
-/// Chain RPC future Result type.
-pub type FutureResult<T> = jsonrpc_core::BoxFuture<Result<T>>;
 
 /// Chain RPC errors.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
 	/// Client error.
 	#[error("Client error: {}", .0)]
-	Client(#[from] Box<dyn std::error::Error + Send>),
+	Client(#[from] Box<dyn std::error::Error + Send + Sync>),
 	/// Other error type.
 	#[error("{0}")]
 	Other(String),
 }
 
 /// Base error code for all chain errors.
-const BASE_ERROR: i64 = 3000;
+const BASE_ERROR: i32 = 3000;
 
-impl From<Error> for rpc::Error {
+impl From<Error> for JsonRpseeError {
 	fn from(e: Error) -> Self {
 		match e {
-			Error::Other(message) => rpc::Error {
-				code: rpc::ErrorCode::ServerError(BASE_ERROR + 1),
-				message,
-				data: None,
-			},
-			e => errors::internal(e),
+			Error::Other(message) =>
+				CallError::Custom { code: BASE_ERROR + 1, message, data: None }.into(),
+			e => e.into(),
 		}
 	}
 }

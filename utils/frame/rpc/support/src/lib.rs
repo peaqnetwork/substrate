@@ -23,8 +23,8 @@
 use codec::{DecodeAll, FullCodec, FullEncode};
 use core::marker::PhantomData;
 use frame_support::storage::generator::{StorageDoubleMap, StorageMap, StorageValue};
-use jsonrpc_client_transports::RpcError;
-use sc_rpc_api::state::StateClient;
+use jsonrpsee::types::Error as RpcError;
+use sc_rpc_api::state::StateApiClient;
 use serde::{de::DeserializeOwned, Serialize};
 use sp_storage::{StorageData, StorageKey};
 
@@ -120,14 +120,18 @@ impl<V: FullCodec> StorageQuery<V> {
 	///
 	/// block_index indicates the block for which state will be queried. A value of None indicates
 	/// the latest block.
-	pub async fn get<Hash: Send + Sync + 'static + DeserializeOwned + Serialize>(
+	pub async fn get<Hash, StateClient>(
 		self,
-		state_client: &StateClient<Hash>,
+		state_client: &StateClient,
 		block_index: Option<Hash>,
-	) -> Result<Option<V>, RpcError> {
+	) -> Result<Option<V>, RpcError>
+	where
+		Hash: Send + Sync + 'static + DeserializeOwned + Serialize,
+		StateClient: StateApiClient<Hash> + Sync,
+	{
 		let opt: Option<StorageData> = state_client.storage(self.key, block_index).await?;
 		opt.map(|encoded| V::decode_all(&encoded.0))
 			.transpose()
-			.map_err(|decode_err| RpcError::Other(Box::new(decode_err)))
+			.map_err(|decode_err| RpcError::Custom(decode_err.to_string()))
 	}
 }

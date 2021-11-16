@@ -22,18 +22,13 @@
 
 #![warn(missing_docs)]
 
-mod errors;
-mod helpers;
-mod metadata;
 mod policy;
 
-pub use helpers::Receiver;
-pub use jsonrpc_core::IoHandlerExtension as RpcExtension;
-pub use metadata::Metadata;
-pub use policy::{DenyUnsafe, UnsafeRpcError};
+pub use policy::DenyUnsafe;
 
 pub mod author;
 pub mod chain;
+/// Child state API
 pub mod child_state;
 pub mod offchain;
 pub mod state;
