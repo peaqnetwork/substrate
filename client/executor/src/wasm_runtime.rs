@@ -137,7 +137,7 @@ impl VersionedRuntime {
 	}
 }
 
-const MAX_RUNTIMES: usize = 2;
+const MAX_RUNTIMES: usize = 32;
 
 /// Cache for the runtimes.
 ///
