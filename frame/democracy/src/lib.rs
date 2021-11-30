@@ -546,6 +546,10 @@ pub mod pallet {
 		PreimageReaped(T::Hash, T::AccountId, BalanceOf<T>, T::AccountId),
 		/// A proposal \[hash\] has been blacklisted permanently.
 		Blacklisted(T::Hash),
+		/// An account has voted in a referendum
+		Voted(T::AccountId, ReferendumIndex, AccountVote<BalanceOf<T>>),
+		/// An account has secconded a proposal
+		Seconded(T::AccountId, PropIndex),
 	}
 
 	#[pallet::error]
@@ -687,8 +691,9 @@ pub mod pallet {
 			ensure!(seconds <= seconds_upper_bound, Error::<T>::WrongUpperBound);
 			let mut deposit = Self::deposit_of(proposal).ok_or(Error::<T>::ProposalMissing)?;
 			T::Currency::reserve(&who, deposit.1)?;
-			deposit.0.push(who);
+			deposit.0.push(who.clone());
 			<DepositOf<T>>::insert(proposal, deposit);
+			Self::deposit_event(Event::<T>::Seconded(who, proposal));
 			Ok(())
 		}
 
@@ -1383,6 +1388,7 @@ impl<T: Config> Pallet<T> {
 						votes.insert(i, (ref_index, vote));
 					},
 				}
+				Self::deposit_event(Event::<T>::Voted(who.clone(), ref_index, vote));
 				// Shouldn't be possible to fail, but we handle it gracefully.
 				status.tally.add(vote).ok_or(ArithmeticError::Overflow)?;
 				if let Some(approve) = vote.as_standard() {
