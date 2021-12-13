@@ -683,7 +683,7 @@ pub mod pallet {
 			T::Currency::reserve(&who, deposit.1)?;
 			deposit.0.push(who.clone());
 			<DepositOf<T>>::insert(proposal, deposit);
-			Self::deposit_event(Event::<T>::Seconded{ who, proposal_index: proposal });
+			Self::deposit_event(Event::<T>::Seconded { who, proposal_index: proposal });
 			Ok(())
 		}
 
@@ -1383,7 +1383,7 @@ impl<T: Config> Pallet<T> {
 						votes.insert(i, (ref_index, vote));
 					},
 				}
-				Self::deposit_event(Event::<T>::Voted{ who: who.clone(), ref_index, vote });
+				Self::deposit_event(Event::<T>::Voted { who: who.clone(), ref_index, vote });
 				// Shouldn't be possible to fail, but we handle it gracefully.
 				status.tally.add(vote).ok_or(ArithmeticError::Overflow)?;
 				if let Some(approve) = vote.as_standard() {

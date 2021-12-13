@@ -2875,8 +2875,7 @@ dependencies = [
 [[package]]
 name = "jsonrpsee"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f8f0ab1e384118d6109f3f515ea0acc92e0b2ab6e256d5cdd14fdfc900ddda2"
+source = "git+https://github.com/PureStake/jsonrpsee?branch=moonbeam-polkadot-jsonrpsee-v0.9.13#c8abbeb3d9f46ec618787920c6f008d5d2ffbc99"
 dependencies = [
  "jsonrpsee-http-server",
  "jsonrpsee-proc-macros",
@@ -2889,8 +2888,7 @@ dependencies = [
 [[package]]
 name = "jsonrpsee-http-server"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "085266bc73277e53dcf694fde48777ed0ba5c4e651dba19981e4141b82157a14"
+source = "git+https://github.com/PureStake/jsonrpsee?branch=moonbeam-polkadot-jsonrpsee-v0.9.13#c8abbeb3d9f46ec618787920c6f008d5d2ffbc99"
 dependencies = [
  "futures-channel",
  "futures-util",
@@ -2899,6 +2897,7 @@ dependencies = [
  "jsonrpsee-types 0.6.0",
  "jsonrpsee-utils",
  "lazy_static",
+ "log",
  "serde_json",
  "socket2 0.4.0",
  "tokio",
@@ -2909,8 +2908,7 @@ dependencies = [
 [[package]]
 name = "jsonrpsee-proc-macros"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04a98c47e0307750253e2e62d0dc2b42e581e427804e617eb5fec254ea385c20"
+source = "git+https://github.com/PureStake/jsonrpsee?branch=moonbeam-polkadot-jsonrpsee-v0.9.13#c8abbeb3d9f46ec618787920c6f008d5d2ffbc99"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -2940,8 +2938,7 @@ dependencies = [
 [[package]]
 name = "jsonrpsee-types"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5205e829b5d2d4c84c7aa1a0ca39e7721def7d54d2d268adebc0b02d35a2b9de"
+source = "git+https://github.com/PureStake/jsonrpsee?branch=moonbeam-polkadot-jsonrpsee-v0.9.13#c8abbeb3d9f46ec618787920c6f008d5d2ffbc99"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2959,8 +2956,7 @@ dependencies = [
 [[package]]
 name = "jsonrpsee-utils"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48c25e88718aac3fb281d7256ce1923ea1d54062ee120e8fbdfb1d92137114ad"
+source = "git+https://github.com/PureStake/jsonrpsee?branch=moonbeam-polkadot-jsonrpsee-v0.9.13#c8abbeb3d9f46ec618787920c6f008d5d2ffbc99"
 dependencies = [
  "arrayvec 0.7.1",
  "beef",
@@ -2971,6 +2967,7 @@ dependencies = [
  "parking_lot",
  "rand 0.8.4",
  "rustc-hash",
+ "rustc-hex",
  "serde",
  "serde_json",
  "thiserror",
@@ -3005,8 +3002,7 @@ dependencies = [
 [[package]]
 name = "jsonrpsee-ws-client"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "121b4483199051e24d62580336f85646219730ec7deeb4cfc428f451df0f4fc0"
+source = "git+https://github.com/PureStake/jsonrpsee?branch=moonbeam-polkadot-jsonrpsee-v0.9.13#c8abbeb3d9f46ec618787920c6f008d5d2ffbc99"
 dependencies = [
  "async-trait",
  "fnv",
@@ -3029,8 +3025,7 @@ dependencies = [
 [[package]]
 name = "jsonrpsee-ws-server"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c482a82d450dd26e6e090c4dc9cb349a41e676865a393da0f26990b2f143a550"
+source = "git+https://github.com/PureStake/jsonrpsee?branch=moonbeam-polkadot-jsonrpsee-v0.9.13#c8abbeb3d9f46ec618787920c6f008d5d2ffbc99"
 dependencies = [
  "futures-channel",
  "futures-util",

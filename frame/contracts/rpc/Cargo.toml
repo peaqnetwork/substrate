@@ -15,7 +15,7 @@ targets = ["x86_64-unknown-linux-gnu"]
 [dependencies]
 codec = { package = "parity-scale-codec", version = "2" }
 anyhow = "1"
-jsonrpsee = { version = "0.6.0", features = ["server", "macros"] }
+jsonrpsee = { git = "https://github.com/PureStake/jsonrpsee", branch = "moonbeam-polkadot-jsonrpsee-v0.9.13", features = ["server", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
