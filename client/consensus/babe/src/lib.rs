@@ -287,7 +287,7 @@ pub enum Error<B: BlockT> {
 	#[display(fmt = "Unexpected config change")]
 	UnexpectedConfigChange,
 	/// Unexpected epoch change
-	#[display(fmt = "Unexpected epoch change")]
+	#[display(fmt = "Unexpected epoch change !")]
 	UnexpectedEpochChange,
 	/// Parent block has no associated weight
 	#[display(fmt = "Parent block of {} has no associated weight", _0)]
@@ -1439,6 +1439,12 @@ where
 				babe_err(Error::<Block>::SlotMustIncrease(parent_slot, slot)).into(),
 			))
 		}
+				
+		log!(target: "babe",
+			log::Level::Info,
+			 "👶 Slot {} - parent_slot {}",
+			 slot,
+			 parent_slot);
 
 		// if there's a pending epoch we'll save the previous epoch changes here
 		// this way we can revert it if there's any error
@@ -1472,7 +1478,14 @@ where
 					block.take_intermediate::<BabeIntermediate<Block>>(INTERMEDIATE_KEY)?;
 
 				let epoch_descriptor = intermediate.epoch_descriptor;
+					 
 				let first_in_epoch = parent_slot < epoch_descriptor.start_slot();
+				
+				log!(target: "babe",
+					log::Level::Info,
+					 "👶 New epoch - parent_slot {} start_slot {}: first_in_epoch: {}",
+					 parent_slot,
+					 epoch_descriptor.start_slot(), first_in_epoch);
 				(epoch_descriptor, first_in_epoch, parent_weight)
 			};
 
@@ -1495,10 +1508,7 @@ where
 					return Err(ConsensusError::ClientImport(
 						babe_err(Error::<Block>::ExpectedEpochChange(hash, slot)).into(),
 					)),
-				(false, true, _) =>
-					return Err(ConsensusError::ClientImport(
-						babe_err(Error::<Block>::UnexpectedEpochChange).into(),
-					)),
+				(false, true, _) => {},
 			}
 
 			let info = self.client.info();
