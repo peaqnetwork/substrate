@@ -101,6 +101,12 @@ pub struct Timepoint<BlockNumber> {
 	index: u32,
 }
 
+impl<BlockNumber> Timepoint<BlockNumber> {
+	pub fn new(height: BlockNumber, index: u32) -> Self {
+		Self { height, index }
+	}
+}
+
 /// An open multisig operation.
 #[derive(Clone, Eq, PartialEq, Encode, Decode, Default, RuntimeDebug, TypeInfo, MaxEncodedLen)]
 #[scale_info(skip_type_params(MaxApprovals))]
