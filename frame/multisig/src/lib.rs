@@ -96,9 +96,9 @@ type BalanceOf<T> =
 )]
 pub struct Timepoint<BlockNumber> {
 	/// The height of the chain at the point in time.
-	height: BlockNumber,
+	pub height: BlockNumber,
 	/// The index of the extrinsic at the point in time.
-	index: u32,
+	pub index: u32,
 }
 
 impl<BlockNumber> Timepoint<BlockNumber> {
