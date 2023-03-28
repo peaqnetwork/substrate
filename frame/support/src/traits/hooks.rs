@@ -21,6 +21,7 @@ use crate::weights::Weight;
 use impl_trait_for_tuples::impl_for_tuples;
 use sp_runtime::traits::AtLeast32BitUnsigned;
 use sp_std::prelude::*;
+use codec::{Decode, Encode};
 
 /// The block initialization trait.
 ///
@@ -205,6 +206,24 @@ impl OnRuntimeUpgrade for Tuple {
 		let mut weight = Weight::zero();
 		for_tuples!( #( weight = weight.saturating_add(Tuple::try_on_runtime_upgrade(checks)?); )* );
 		Ok(weight)
+	}
+
+	#[cfg(feature = "try-runtime")]
+	fn pre_upgrade() -> Result<Vec<u8>, &'static str> {
+		let mut state: Vec<Vec<u8>> = Vec::default();
+		for_tuples!( #( state.push(Tuple::pre_upgrade()?); )* );
+		Ok(state.encode())
+	}
+
+	#[cfg(feature = "try-runtime")]
+	fn post_upgrade(state: Vec<u8>) -> Result<(), &'static str> {
+		let state: Vec<Vec<u8>> = Decode::decode(&mut state.as_slice())
+			.expect("the state parameter should be the same as pre_upgrade generated");
+		let mut state_iter = state.into_iter();
+		for_tuples!( #( Tuple::post_upgrade(
+			state_iter.next().expect("the state parameter should be the same as pre_upgrade generated")
+		)?; )* );
+		Ok(())
 	}
 }
 
