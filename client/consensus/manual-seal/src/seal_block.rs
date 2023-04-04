@@ -88,7 +88,7 @@ pub async fn seal_block<B, BI, SC, C, E, TP, CIDP, P>(
 	SC: SelectChain<B>,
 	TransactionFor<C, B>: 'static,
 	CIDP: CreateInherentDataProviders<B, ()>,
-	P: codec::Encode + codec::WrapperTypeEncode + Send + Sync + 'static,
+	P: codec::Encode + Send + Sync + 'static,
 {
 	let future = async {
 		if pool.status().ready == 0 && !create_empty {

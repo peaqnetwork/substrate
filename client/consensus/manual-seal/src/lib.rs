@@ -163,7 +163,7 @@ pub async fn run_manual_seal<B, BI, CB, E, C, TP, SC, CS, CIDP, P>(
 	TransactionFor<C, B>: 'static,
 	TP: TransactionPool<Block = B>,
 	CIDP: CreateInherentDataProviders<B, ()>,
-	P: codec::Encode + codec::WrapperTypeEncode + Send + Sync + 'static,
+	P: codec::Encode + Send + Sync + 'static,
 {
 	while let Some(command) = commands_stream.next().await {
 		match command {
@@ -225,7 +225,7 @@ pub async fn run_instant_seal<B, BI, CB, E, C, TP, SC, CIDP, P>(
 	TransactionFor<C, B>: 'static,
 	TP: TransactionPool<Block = B>,
 	CIDP: CreateInherentDataProviders<B, ()>,
-	P: codec::Encode + codec::WrapperTypeEncode + Send + Sync + 'static,
+	P: codec::Encode + Send + Sync + 'static,
 {
 	// instant-seal creates blocks as soon as transactions are imported
 	// into the transaction pool.
@@ -279,7 +279,7 @@ pub async fn run_instant_seal_and_finalize<B, BI, CB, E, C, TP, SC, CIDP, P>(
 	TransactionFor<C, B>: 'static,
 	TP: TransactionPool<Block = B>,
 	CIDP: CreateInherentDataProviders<B, ()>,
-	P: codec::Encode + codec::WrapperTypeEncode + Send + Sync + 'static,
+	P: codec::Encode + Send + Sync + 'static,
 {
 	// Creates and finalizes blocks as soon as transactions are imported
 	// into the transaction pool.
